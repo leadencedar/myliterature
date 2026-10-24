@@ -1,0 +1,7 @@
+{
+  "task_id": "task-interactive-story",
+  "task_description": "为「文墨」实现互动推演（世界线）：分支树推演、世界线差异沿树继承与锁定、推演循环（流式情节 + 结构化尾部）、推演 UI 与世界线导航、世界观条目的作用范围与可变性及「提升为世界观」（提案）、沉淀为大纲 / 外传（提案）并接入「写这一章」、Dexie v7 与备份 v4、文档更新。依据 .agents/tasks/interactive-story/{brief,requirements,design,design-addendum,plan}.md。",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004", "FEAT-005", "FEAT-006"],
+  "blocked_reason": null
+}

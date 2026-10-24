@@ -1,0 +1,24 @@
+{
+  "verdict": "APPROVED",
+  "findings": [
+    {
+      "id": 1,
+      "severity": "LOW",
+      "blocking": false,
+      "confidence": "confirmed",
+      "title": "区块标题「新建」不足 44px",
+      "detail": "WritingNormsSection.tsx 141 行 Section action 的「新建」仍是 size=\"sm\"（h-9，36px），低于 NFR7 的 44px；修复轮以与 StyleSection 写法一致为由保留。空状态与列表下方另有 md 尺寸入口，影响有限。",
+      "fix": "改为 size=\"md\" 或加 tap-target。"
+    },
+    {
+      "id": 2,
+      "severity": "NIT",
+      "blocking": false,
+      "confidence": "confirmed",
+      "title": "表单视图没有「返回结果」",
+      "detail": "NormCheckSheet 从结果点「重新检查」后 formRequested=true，只在打开、检查成功、停止时清回 false；作者不重跑时只能关掉面板再打开才能回到上一次结果（NormCheckSheet.test.tsx 593 行走的就是这条路）。",
+      "fix": "result !== null && formRequested 时加 ghost 按钮「返回结果」，点击 setFormRequested(false)。"
+    }
+  ],
+  "reviewDoc": "/Users/leadencedar/Production/Project/MyLiterature/.agents/tasks/writing-norms/code-review.md"
+}

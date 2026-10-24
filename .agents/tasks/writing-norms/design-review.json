@@ -1,0 +1,62 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "id": 1,
+      "severity": "MEDIUM",
+      "title": "AI 精简「另存为新规范」成功后编辑面板状态未定义，原规范可能被一次普通保存重新启用",
+      "location": "design.md 1.5 流程第 3 步；7.2 第 7 点；第 9 节「另存精简版」；12.6",
+      "fix": "另存成功 → invalidate() → 关闭编辑面板，区块内 role=status「已另存为《{新标题}》，原规范已停用。」；失败保持面板与预览。精简 streaming/preview 阶段禁用标题、正文、上传、模板、作用范围、启用开关与底部「保存」。12.6 断言另存后面板关闭、重开原规范「启用」未勾选、预览阶段正文输入框 disabled"
+    },
+    {
+      "id": 2,
+      "severity": "LOW",
+      "title": "「有未保存修改」的判定规则未写",
+      "location": "design.md 1.5；7.2 第 7 点",
+      "fix": "dirty = title/content/enabled 严格比较 || normalizeNormScopes(draft.scopes).join() !== normalizeNormScopes(norm.scopes).join()"
+    },
+    {
+      "id": 3,
+      "severity": "LOW",
+      "title": "另存精简版前没有 validateNormDraft 预检，ZodError 的 JSON message 会直接显示",
+      "location": "design.md 1.5 第 3 步；第 4 节；第 9 节",
+      "fix": "另存前 validateNormDraft({ title: condensedTitle(norm.title), content })，有错误时在预览下方显示中文文案、不调仓储；预览 trim 为空时「另存」disabled"
+    },
+    {
+      "id": 4,
+      "severity": "LOW",
+      "title": "检查系统提示里核心设定块的拼接格式与顺序未写",
+      "location": "design.md 1.7.3 buildNormCheckSystemPrompt",
+      "fix": "['【核心设定（供判断，不是检查对象）】', ...pinned.map((e) => renderEntry(e, categories))].join('\\n\\n')，顺序沿用 context.entries；12.7b 断言两条核心设定按序、恰好一个空行"
+    },
+    {
+      "id": 5,
+      "severity": "LOW",
+      "title": "检查面板「输入 token 估算」的口径未定义",
+      "location": "design.md 1.7.4",
+      "fix": "X = K × estimateTokens(system) + Σ estimateTokens(user_i)，不含 schema 块；文案「本章约 N 字，将分 K 段检查（K 次调用），输入约 X tokens」，N = countWords(content)，K = 1 时省略分段部分"
+    },
+    {
+      "id": 6,
+      "severity": "NIT",
+      "title": "extractWorldviewChunk 写「同上」，但它现在是单独 await listEntries",
+      "location": "design.md 6.4 调用处表格",
+      "fix": "写明 const [entries, norms] = await Promise.all([repository.listEntries(novel.id), repository.listWritingNorms(novel.id)])"
+    },
+    {
+      "id": 7,
+      "severity": "NIT",
+      "title": "ChapterEditorScreen 需新增 useLlm()；禁用原因的 3 秒计时器需清理",
+      "location": "design.md 1.7.6 禁用",
+      "fix": "顶层加 const llm = useLlm()；计时器存 useRef，再次点击与卸载时 clearTimeout"
+    },
+    {
+      "id": 8,
+      "severity": "NIT",
+      "title": "createWritingNorm 实现行漏了 normalizeNormScopes",
+      "location": "design.md 第 4 节实现表",
+      "fix": "scopes 缺省为 ALL_NORM_SCOPES，传入时先 normalizeNormScopes 再 parse；12.1 补 ['check','writing','writing'] → ['writing','check'] 用例"
+    }
+  ],
+  "reviewDoc": "/Users/leadencedar/Production/Project/MyLiterature/.agents/tasks/writing-norms/design-review.md"
+}

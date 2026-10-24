@@ -1,0 +1,62 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "id": 1,
+      "severity": "MEDIUM",
+      "title": "翻译相关写入用过期的整份 drafts 覆盖库里的行：付过钱的译文会被冲掉，已提交的任务会违反阶段表",
+      "location": "3.2、4.3（翻译一章 / 勾选 / 重试 / 跳过剩下的）、4.6",
+      "fix": "新增仓储方法 patchImportDrafts(novelId, [{ index, patch }])：只开 importJobs 的 rw 事务；任务不存在、parse 失败或 destination !== null 时拒绝，且不新建行；按 index 合并进库里最新的 drafts；已译（done）的草稿忽略降级或改写正文的 patch。translateOne / markTranslate / toggle / retry / goToDestination 都改用它；循环被拒时静默停下并重读任务。可选：卸载时 abort 进行中的翻译。4.6 改正「重新提取」的说法。补对应的仓储和界面测试。"
+    },
+    {
+      "id": 2,
+      "severity": "MEDIUM",
+      "title": "长篇单章的翻译会被输出上限截断，截断后还被标成「已译」；世界观提交后原文不留，等于静默丢内容",
+      "location": "FR-1.6、4.3 翻译一章、4.5、第 9 节",
+      "fix": "推荐方案 A：ChatResult 增加 finishReason；translateOne 里 finishReason === 'length' 时抛 LlmError('parse', '译文超出单次输出上限被截断了')，这一章标成 failed、不写草稿；分章页对超过 6000 字的外文草稿显示切小的提示；补截断测试。备选方案 B：超长草稿分段翻译，用 translatedParts 按段落盘。"
+    },
+    {
+      "id": 3,
+      "severity": "NIT",
+      "title": "提取途中外传被删时，markChapter 后正常返回，循环不会停，也不显示 alert，和第 9 节的「失败即停」矛盾",
+      "location": "4.4、第 9 节",
+      "fix": "外传读不到时 throw new Error('这部外传已不存在，可能已被删除')，由 runLoop 的 catch 统一标失败、显示 alert 并停下。"
+    },
+    {
+      "id": 4,
+      "severity": "NIT",
+      "title": "提交因「所选外传已不存在」被拒后，picker 里仍然列着那部外传",
+      "location": "4.2、第 9 节",
+      "fix": "被拒且 destination 仍为 null 时，重新加载 listChapters 和 listSideStories 并重算 lineCounts；所选 id 已不在列表里时回退到「新建外传」。"
+    },
+    {
+      "id": 5,
+      "severity": "NIT",
+      "title": "packWorldviewChunks 切超长章时，切出的每段是否带标题行没写；测试里「拼接后与原文一致」和补标题行的规则冲突",
+      "location": "4.5、11 节",
+      "fix": "写明超长章切出的各段正文不带标题行，标题只放在 chunk.title；测试改成去掉补入的标题行和空白后再比较。"
+    },
+    {
+      "id": 6,
+      "severity": "NIT",
+      "title": "saveImportDrafts 在 destination 为 null 时无条件覆盖，可能悄悄冲掉另一处已译好的草稿",
+      "location": "4.3 分章确认",
+      "fix": "入参加 expectedJobId；库里的行 parse 成功且 id 与 expectedJobId 不同时拒绝，界面按第 9 节的已有规则处理。"
+    },
+    {
+      "id": 7,
+      "severity": "NIT",
+      "title": "「上一批 N 章」的 N 从哪里来没写；按现有代码用的是本地 drafts.length，刷新续跑后为 0",
+      "location": "4.8",
+      "fix": "FinishedDestination 的 main / side 两支加 count，在 finalize 里取 current.chapters.length，continueImport 改用它。"
+    },
+    {
+      "id": 8,
+      "severity": "NIT",
+      "title": "AppDatabase 的 sideStories 表声明没列出来",
+      "location": "3.3",
+      "fix": "在 db.ts 的类上补 sideStories!: Table<SideStory, string>，并在 v5 的注释里写明这张表和 sideStoryId 索引的用途。"
+    }
+  ],
+  "reviewDoc": "/Users/leadencedar/Production/Project/MyLiterature/.agents/tasks/import-destination-sidestory/design-review.md"
+}

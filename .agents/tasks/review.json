@@ -1,0 +1,24 @@
+{
+  "verdict": "APPROVED",
+  "findings": [
+    {
+      "severity": "minor",
+      "confidence": "confirmed",
+      "label": "粘贴步骤说明与世界观模式矛盾",
+      "detail": "世界观模式下粘贴页顶部仍无条件显示「下一步会切成章节供你核对，确认后才会写入作品」，与「设定文本不会写成章节」提示冲突；按 importType 切换文案。"
+    },
+    {
+      "severity": "minor",
+      "confidence": "confirmed",
+      "label": "暂停提示写「本章」",
+      "detail": "pause() 固定 setNote('正在停在本章结束处…')，世界观模式应为「本段」。"
+    },
+    {
+      "severity": "minor",
+      "confidence": "likely",
+      "label": "未配置模型时可直接开始提取设定",
+      "detail": "「开始提取设定」只按 text.trim() 禁用，未配模型时会建 job 后第 1 段立即失败；复用 llm.configured 判定禁用或提示。"
+    }
+  ],
+  "reviewDoc": "/Users/leadencedar/Production/Project/MyLiterature/.agents/tasks/review.md"
+}

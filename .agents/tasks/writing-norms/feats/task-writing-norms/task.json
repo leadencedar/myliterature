@@ -1,0 +1,7 @@
+{
+  "task_id": "task-writing-norms",
+  "task_description": "文墨「写作规范」：作品级多份写作规范（Dexie v6 + 仓储 + 备份 v3），按作用范围注入各任务稳定前缀（无规范时逐字节不变），知识库区块（新建/粘贴/上传/编辑/删除/启停/排序/模板/AI 精简），整章与段落加工的临时取消，反向提取注入，章节编辑器「按规范检查本章」，文档更新与全部测试。完整计划见 /Users/leadencedar/Production/Project/MyLiterature/.agents/tasks/writing-norms/plan.md",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004", "FEAT-005"],
+  "blocked_reason": null
+}

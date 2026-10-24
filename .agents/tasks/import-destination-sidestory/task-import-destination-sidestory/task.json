@@ -1,0 +1,7 @@
+{
+  "task_id": "task-import-destination-sidestory",
+  "task_description": "按定稿设计 .agents/tasks/import-destination-sidestory/design.md 实现两件事：(1) 导入目的地后置——粘贴步骤去掉导入类型，分章→(翻译)→选目的地（主线 / 外传 / 仅作为世界观设定），草稿与译文存在 ImportJob.drafts，世界观可翻译且全程不写 Chapter，截断检测、连续导入；(2) 外传——SideStory 表 + Chapter.sideStoryId，独立编号与摘要链，不计入主线，写作页/编辑器/上下文/摘要/导出/书架支持。Dexie v5、备份 v2 兼容旧数据。",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004", "FEAT-005"],
+  "blocked_reason": null
+}

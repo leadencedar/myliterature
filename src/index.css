@@ -1,0 +1,178 @@
+@import 'tailwindcss';
+
+/*
+ * 设计令牌。写作场景下以「纸墨」为基调：
+ * 正文用衬线体保证长文阅读舒适，UI 用系统无衬线体。
+ *
+ * 响应式策略：**单套 DOM，用断点切换形态**，不为桌面端另开一套组件。
+ * 窄屏是底部 Tab 栏 + 底部抽屉的移动端形态；`lg`（1024px）以上换成
+ * 左侧边栏 + 右侧抽屉 / 居中对话框的桌面形态。
+ * 之所以不用 JS 媒体查询分叉渲染：同一份内容出现两棵 DOM 会让读屏读到两遍，
+ * 而且两条分支必然随时间漂移。
+ */
+@theme {
+  --color-paper: #fdfcfa;
+  --color-paper-raised: #ffffff;
+  --color-paper-sunken: #f4f2ee;
+
+  --color-ink-900: #14181f;
+  --color-ink-700: #333a45;
+  --color-ink-500: #5c6675;
+  --color-ink-300: #98a1ae;
+  --color-ink-100: #dfe2e7;
+
+  --color-seal: #d9561f;
+  --color-seal-soft: #fdf1ec;
+
+  --color-accent: #b0751f;
+  --color-accent-soft: #fbf3e4;
+
+  --font-ui:
+    -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    'Noto Sans SC', sans-serif;
+  --font-reading: 'Songti SC', 'Source Han Serif SC', 'Noto Serif SC', 'STSong', Georgia, serif;
+
+  /* 底部 Tab 栏高度，供页面预留滚动空间（仅窄屏） */
+  --spacing-tabbar: 3.75rem;
+  /* 桌面端左侧边栏宽度 */
+  --spacing-sidebar: 14rem;
+}
+
+@layer base {
+  html {
+    /* 防止 iOS 横向滚动与双击缩放 */
+    -webkit-text-size-adjust: 100%;
+    touch-action: manipulation;
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font-ui);
+    background-color: var(--color-paper);
+    color: var(--color-ink-900);
+    -webkit-font-smoothing: antialiased;
+    /* 阻止移动端整页橡皮筋效果，保持类原生手感 */
+    overscroll-behavior-y: none;
+  }
+
+  /* 触控反馈交给组件控制，去掉移动浏览器默认的高亮块 */
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* 键盘弹出时输入框不被遮挡 */
+  input,
+  textarea,
+  select {
+    font: inherit;
+    /* iOS 上小于 16px 的输入框会触发自动放大 */
+    font-size: max(16px, 1rem);
+  }
+
+  /*
+   * 桌面端输入框不必被顶到 16px。
+   * 那条规则是为了躲开 iOS 的自动放大，在指针设备上只会让表单显得笨重。
+   */
+  @media (pointer: fine) {
+    input,
+    textarea,
+    select {
+      font-size: 1rem;
+    }
+  }
+
+  /*
+   * 键盘可见焦点。
+   *
+   * 移动端全靠触控，焦点环基本看不到；桌面端相反 —— 没有焦点环，
+   * 键盘用户在几十个控件之间完全不知道自己在哪。用 :focus-visible
+   * 而不是 :focus，鼠标点击不会留下焦点环。
+   */
+  :focus-visible {
+    outline: 2px solid var(--color-seal);
+    outline-offset: 2px;
+  }
+
+  /* 细滚动条：只在有精确指针的设备上出现，触屏设备本来就没有可见滚动条 */
+  @media (pointer: fine) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: var(--color-ink-100) transparent;
+    }
+
+    *::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    *::-webkit-scrollbar-thumb {
+      background-color: var(--color-ink-100);
+      border: 3px solid transparent;
+      border-radius: 999px;
+      background-clip: content-box;
+    }
+
+    *::-webkit-scrollbar-thumb:hover {
+      background-color: var(--color-ink-300);
+    }
+
+    *::-webkit-scrollbar-track {
+      background: transparent;
+    }
+  }
+}
+
+@utility safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@utility safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* 最小 44px 触控目标，符合移动端可访问性要求 */
+@utility tap-target {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+}
+
+/*
+ * 跳到主内容。
+ *
+ * 桌面端键盘用户每换一页都要先穿过整个侧边栏才能到正文，这条链接是标准解法。
+ * 用位移移出视口而不是 display:none —— 后者无法被聚焦，链接也就永远触发不了。
+ */
+@utility skip-link {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 60;
+  border-radius: 0.75rem;
+  background-color: var(--color-ink-900);
+  color: var(--color-paper);
+  padding: 0.5rem 0.875rem;
+  font-size: 0.875rem;
+  transform: translateY(-250%);
+  transition: transform 0.15s ease-out;
+
+  &:focus {
+    transform: translateY(0);
+  }
+}
+
+/*
+ * 正文阅读列宽。
+ *
+ * 桌面端最容易犯的错是让正文铺满 1920px —— 一行八十多个汉字，
+ * 眼睛回到行首时会丢行。限宽到约 40 个汉字，与纸书的行长接近。
+ */
+@utility reading-column {
+  width: 100%;
+  margin-inline: auto;
+  max-width: 46rem;
+}

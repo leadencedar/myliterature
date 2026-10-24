@@ -1,0 +1,32 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "round": 3,
+  "findings": [
+    {
+      "severity": "MEDIUM",
+      "title": "回收站确认框装不下 role=\"alert\"，§8.5 与 §8.3「不改 ConfirmDialog」冲突",
+      "detail": "TrashSheet 的彻底删除用共享 ConfirmDialog（只接受字符串 message，没有 children 或错误插槽），无法在框内显示 role=\"alert\"。建议：TrashSheet 改用本地拼的 <Sheet size=\"dialog\"> + footer（取消 / 永久删除，danger），purgeError 非空时渲染 <p role=\"alert\">；ui/Sheet.tsx 不改；写进 §8.5 与 FEAT 1。"
+    },
+    {
+      "severity": "MEDIUM",
+      "title": "通用主角在「写这一章」里不保证注入，外传章节上基本拿不到",
+      "detail": "D7.3 说通用主角「已在 context.entries 里」，但 context.entries 只是候选；computeDefaultEntryIds 只看 linkedEntryIds、上一章 appearingEntryIds 与大纲 / 外传简介 / 上一章摘要的名称匹配。外传章节没有大纲节点，brief 不在 hints 里，通用主角不会被默认预选。建议：scenarioContext 加 castEntryIds 与 hintText；构建器仅在 scenarioContext 存在时把 castEntryIds 并入显式默认预选、把 hintText 追加进 hints（基线不变）；e2e 加「通用人物开局 → 外传 → 请求含其说话方式」，构建器单测加对照。"
+    },
+    {
+      "severity": "LOW",
+      "title": "「追加到外传」的「最后一章」没排除无溯源章节",
+      "detail": "外传末尾有手写章节或经合并清理后 scenarioSource 为 null 时 L 未定义。建议：L 取按 order 最后一个 scenarioSource 非空章节的 nodeIds 末项；一章都没有时不参与可追加判定；pathOutline.test.ts 加一例。"
+    },
+    {
+      "severity": "NIT",
+      "title": "BackupSection 有两处合并说明文案",
+      "detail": "第 31 行选项说明与第 185 行确认文案都写了「id 相同的记录以备份为准」，§4.2 只说改一处；两处都补或写明只改第 31 行。"
+    },
+    {
+      "severity": "NIT",
+      "title": "T5 补强用例的 summary 请求时序没有确定的预期",
+      "detail": "路径 12 步、第 5 步缺摘要时按 D5.3 gap = 9 > 7，是同步补；用例写死「先发 1 次 summary，完成后才发 step」。"
+    }
+  ],
+  "reviewDoc": "/Users/leadencedar/Production/Project/MyLiterature/.agents/tasks/interactive-story/design-review.md"
+}

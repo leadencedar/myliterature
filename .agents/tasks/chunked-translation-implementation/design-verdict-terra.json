@@ -1,0 +1,41 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "id": 1,
+      "severity": "MEDIUM",
+      "location": "design.md §6.2、§9.1、§10.6",
+      "problem": "outbox 顺序门只检查已经存在的较早 outbox，没有定义较早 leaf/draft 仍 pending、running、failed 或 awaiting 且尚无 outbox 时的仓储级阻断；较晚 done 段可先 first-wins 写 glossary。",
+      "fix": "在 reconcile 事务中重读统一的 earlierSourcesSettled 谓词：每个更早有效 leaf 必须已正式 done 且其 outbox applied（verbatim 仅需 done）；import 还要求每个更早 draft 已完整 translate+applied 或明确 use-source。否则返回 blocked、零 glossary 写入，并覆盖同章和跨 draft 的 direct-reconcile 测试。"
+    },
+    {
+      "id": 2,
+      "severity": "MEDIUM",
+      "location": "design.md §10.7、§11.4、§15.2、§16",
+      "problem": "未定义将最终 entry/style/progress proposals materialize 与删除 ImportJob 的原子或幂等 finalizer。当前同类代码先 bulkAdd proposals 再删除任务，proposal 每次重建会产生 newId；中断后恢复会重复提案。",
+      "fix": "增加覆盖 importJobs 与 proposals 的条件式 finalizeImportExtraction 事务，重读并比较 job/finalization fingerprint 后同一事务写确定 ID 的 proposals 并删除任务；或持久化同一组 proposal IDs/finalization state 后幂等重放。测试主线、外传、世界观在写 proposal 与删任务间失败/并发时只得到零或一套提案。"
+    },
+    {
+      "id": 3,
+      "severity": "MEDIUM",
+      "location": "design.md §10.1～§10.2、§10.7、§11.1、§15.2",
+      "problem": "saveImportDrafts 拒绝所有无法 parse 的 raw ImportJob，discardImportDraftJob 又要求 parsed canonical fingerprint，deleteImportJob 拒绝 draft phase；损坏/遗留 draft job 因而不能清除也不能开始新导入。",
+      "fix": "保留不覆盖 raw 行的规则，新增仅供二次确认恢复的 discardInvalidImportJob(novelId, expectedRawFingerprint)。事务中确认 raw 行仍不可 parse 且 fingerprint 匹配才删除；若变为合法或变化则零写入。为取消、竞态变化和成功恢复创建新任务添加测试。"
+    },
+    {
+      "id": 4,
+      "severity": "MEDIUM",
+      "location": "design.md §9.3、§9.4、§10.2 requestTranslationPause",
+      "problem": "§9.4 要求 pause 校验完整 identity、owner 与 lease，但 requestTranslationPause 只收 runBatchId 和 executionEpoch。旧/非 owner 标签可暂停另一 runner，且实现者无法同时满足两节。",
+      "fix": "把 pause 明确定义为 batch-owner capability，至少传 ownerId 并在事务比较 active batch/attempt owner；不匹配返回 not-applied、不得改状态。若要允许任意标签全局暂停，则明确写成 §9.4 的例外并规定 UI。增加非 owner 零写入和 owner 正常暂停的双实例测试。"
+    },
+    {
+      "id": 5,
+      "severity": "MEDIUM",
+      "location": "design.md §4.2～§4.3、§5、§10.1～§10.4、§14.2",
+      "problem": "draft.index、segment/unit/attempt/runBatch/outbox ID 和树/计数引用被当作唯一 locator 使用，却只有格式校验，未明确由 schema/语义校验拒绝重复或悬空值。v5 损坏数据可使按 draftIndex 或 ID 的条件写定位不确定。",
+      "fix": "在共享语义校验中强制 ImportDraft.index 唯一（并锁定连续性规则），以及 plan 内 segment、unit、attempt、runBatch、outbox 等命名空间唯一；校验 initialSegmentIds、parent/child/root、candidate/winner/outbox attempt 和 treeCalls 引用。创建、二分、语义写、v5 replace/merge 都应拒绝重复或悬空 locator，并新增 AC-42/AC-50 测试。"
+    }
+  ],
+  "reviewDoc": "/Users/leadencedar/Production/Project/MyLiterature/.agents/tasks/chunked-translation-implementation/design-review-terra.md"
+}

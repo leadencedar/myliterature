@@ -1,0 +1,26 @@
+{
+  "verdict": "APPROVED",
+  "findings": [
+    {
+      "severity": "non-blocking",
+      "file": "src/domain/sideStory.test.ts:32",
+      "message": "夹具补 scenarioSource: null（DexieNovelRepository.test.ts 同类一处），超出 plan §0 允许的四类断言修改；仅类型需要、不改断言，FEAT-001 偏差第 9 条已记录。"
+    },
+    {
+      "severity": "non-blocking",
+      "file": "src/features/scenario/ScenarioBreadcrumb.tsx:5",
+      "message": "注释称窄屏折叠项读屏仍可达，但 hidden（display:none）会移出无障碍树；实际替代路径是「…」打开导航，建议改注释或补说明。"
+    },
+    {
+      "severity": "non-blocking",
+      "file": "/tmp/myliterature-baseline-interactive",
+      "message": "按 plan 最终验收第 2 条，审查结束后删除基线副本。"
+    },
+    {
+      "severity": "non-blocking",
+      "file": "src/features/scenario/ScenarioPage.tsx",
+      "message": "375px / 1280px 视觉形态（验收 40）需手测。"
+    }
+  ],
+  "reviewDoc": "/Users/leadencedar/Production/Project/MyLiterature/.agents/tasks/interactive-story/code-review.md"
+}

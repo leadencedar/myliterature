@@ -1,0 +1,111 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "id": 1,
+      "severity": "HIGH",
+      "location": "design.md §14.3",
+      "problem": "merge 允许相同 jobId 的备份行直接覆盖本地行，会丢失同一任务在本机已付费完成的 segment，且可把已 commit 的 ImportJob 倒退后重复建章。",
+      "fix": "merge 仅允许规范化后深相等的同 ID 活跃任务；任何差异在写入前整份拒绝，并校验 prospective merged snapshot。"
+    },
+    {
+      "id": 2,
+      "severity": "HIGH",
+      "location": "design.md §10.5、§12.1–12.3",
+      "problem": "即时 stale 只覆盖运行中状态；paused、failed、completed-preview 下的可见正文仍有 800ms 未落盘窗口，旧译文可越过数据库 hash 检查覆盖作者新输入。",
+      "fix": "任一未结束 job 存在时，正文首次变化立即本地禁用所有任务动作并标 stale；create/continue/retry/apply 全部等待可失败的串行 flush barrier 后重读校验。"
+    },
+    {
+      "id": 3,
+      "severity": "HIGH",
+      "location": "design.md §4.3、§14.1–14.2",
+      "problem": "v5 复用带 default 的 schema，缺失 chapterTranslationJobs 或 translationPlan 会被补空/null，损坏备份可恢复成功却丢付费进度。",
+      "fix": "增加 version-aware backup schema：v1–v4 补默认，v5 强制这些属性显式存在。"
+    },
+    {
+      "id": 4,
+      "severity": "MEDIUM",
+      "location": "design.md §14、§16；现有 DexieNovelRepository.exportSnapshot",
+      "problem": "设计未要求全量导出使用同一只读事务，Chapter/job 与 glossary/outbox 可能来自不同时间点。",
+      "fix": "在单个 Dexie 只读事务中读取全部快照表，并在序列化前用 v5 严格 schema 校验。"
+    },
+    {
+      "id": 5,
+      "severity": "MEDIUM",
+      "location": "design.md §6.2、§10.5、§11.2",
+      "problem": "stale/use-source 仅 supersede attempt、清 lease、暂停 plan，没有把 running segment 和 active batch 迁入合法终态，违反 running 必须有 attempt+lease 的不变量。",
+      "fix": "原子执行 attempt→superseded、segment→pending、activeAttemptId→null、batch→aborted、activeRunBatchId→null；历史 lease 留在 attempt。"
+    },
+    {
+      "id": 6,
+      "severity": "MEDIUM",
+      "location": "design.md §9.1、§10.4、§11.2",
+      "problem": "use-source 后 pending outbox 不对账，但后续 claim 又要求所有更早 outbox applied，形成永久阻塞并破坏撤销后的译名连续性。",
+      "fix": "增加 outbox discarded 终态；切 use-source 时 pending→discarded，撤销时 discarded→pending 并在 claim 前按序 reconcile。"
+    },
+    {
+      "id": 7,
+      "severity": "MEDIUM",
+      "location": "design.md §8.4、§10.3–10.4、§17 AC-42",
+      "problem": "后段先返回时前驱未 done，无法做 seam 校验；现有 schema 只能提前 done 或丢弃付费输出。",
+      "fix": "增加 awaiting-predecessor 候选状态和非正式 candidate 字段，前驱完成后再校验 seam 并原子晋升 done/outbox。"
+    },
+    {
+      "id": 8,
+      "severity": "MEDIUM",
+      "location": "design.md §7.2、§8.2",
+      "problem": "fenced code 是有效 verbatim 叶，仍会被上一/下一有效叶 reference 规则送入模型，违反 AC-03。",
+      "fix": "任何 verbatim 范围不得进入任一 prompt；直接邻接叶为 verbatim 时省略该方向 reference。"
+    },
+    {
+      "id": 9,
+      "severity": "MEDIUM",
+      "location": "design.md §8.2",
+      "problem": "不足 40 grapheme 的 reference 用完整非空子串否决，会把短人名、代词和正常复沓误判为 reference-repeat。",
+      "fix": "reference-repeat 仅对至少 40 grapheme 的 reference 启用 40-grapheme 窗口匹配。"
+    },
+    {
+      "id": 10,
+      "severity": "MEDIUM",
+      "location": "design.md §8.1、§8.4、§14.1、§15.1",
+      "problem": "协议残留检查在不同章节分别描述为控制行、行首或任意前缀，行中 marker 是否拒绝不明确。",
+      "fix": "定义唯一的非行锚定 containsTranslationProtocolSyntax，并用于 unit、segment、finalText 与 apply preview。"
+    },
+    {
+      "id": 11,
+      "severity": "MEDIUM",
+      "location": "design.md §3.2、§9.3",
+      "problem": "claim 时即增加实际调用数，但 glossary/prompt/config 仍可能在 fetch 前失败；达到 tree/extra 上限后的全局停止时点也未锁定。",
+      "fix": "分离 claim 与条件式 dispatch，只有 dispatch 增加实际计数；达到 7 tree calls 或 6 extra calls 后当前段 settle 即 exhausted，禁止下一请求。"
+    },
+    {
+      "id": 12,
+      "severity": "MEDIUM",
+      "location": "design.md §10.1–10.2",
+      "problem": "新增仓储 API 没有完整可编译签名与结果 union，且缺 expectedRunBatchId 和 extraction 最小 patch 形状。",
+      "fix": "定义 Create/Authorize/Claim/Complete/Reconcile/Finalize 等穷尽 union，所有 run 写入携带 expectedRunBatchId，extraction 仅接受单 chapter/chunk 语义 patch。"
+    },
+    {
+      "id": 13,
+      "severity": "MEDIUM",
+      "location": "design.md §17.2 AC-52、AC-54",
+      "problem": "AC-52/54 仍写人工检查或发布清单，违反 AC-01～AC-54 每项断言必须自动化。",
+      "fix": "新增四文档契约测试、过时语句负断言和可机器校验的 AC-54 证据映射。"
+    },
+    {
+      "id": 14,
+      "severity": "NIT",
+      "location": "design.md §4.1–4.2",
+      "problem": "文字称所有常量都持久化到 policy，但 schema 未包含 lease、poll 与退避常量。",
+      "fix": "明确仅 schema 所列值持久化、其余由 plan version 固定，或把遗漏常量真正加入 policy。"
+    },
+    {
+      "id": 15,
+      "severity": "NIT",
+      "location": "design.md §8.2",
+      "problem": "上一章尾部以 sourceContent 非空 OR 当前正文为中文取得资格，可能注入后来改回外文的正文。",
+      "fix": "按当前 content 非空且无需翻译判断，sourceContent 只作历史留底。"
+    }
+  ],
+  "reviewDoc": "/Users/leadencedar/Production/Project/MyLiterature/.agents/tasks/chunked-translation-implementation/design-review.md"
+}
