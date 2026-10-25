@@ -1,10 +1,26 @@
 /**
- * 文本的「带走」通道：下载成文件，或复制到剪贴板。
+ * 文件的「带走」通道：下载成文件，或复制到剪贴板。
  *
  * 两条路都留着是有原因的：移动端浏览器对下载的处理差异很大（iOS 上会
  * 跳到另一个界面、部分内嵌浏览器直接吞掉），而复制到剪贴板几乎总能用，
  * 且对「贴进平台编辑器」这个最常见的去向来说更顺手。
  */
+
+/** 把已经准备好的 URL 交给浏览器下载：a[download] 是各端唯一通用的入口 */
+function triggerDownload(url: string, name: string): void {
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = name;
+  anchor.rel = 'noopener';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+
+  if (typeof URL.revokeObjectURL === 'function' && url.startsWith('blob:')) {
+    // 立刻回收会让部分浏览器来不及开始下载，推到下一轮任务
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}
 
 /** 触发浏览器下载一个文本文件 */
 export function saveTextFile(name: string, text: string, mime = 'text/plain;charset=utf-8'): void {
@@ -19,19 +35,39 @@ export function saveTextFile(name: string, text: string, mime = 'text/plain;char
   } catch {
     url = `data:${mime},${encodeURIComponent(text)}`;
   }
+  triggerDownload(url, name);
+}
 
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = name;
-  anchor.rel = 'noopener';
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-
-  if (typeof URL.revokeObjectURL === 'function' && url.startsWith('blob:')) {
-    // 立刻回收会让部分浏览器来不及开始下载，推到下一轮任务
-    setTimeout(() => URL.revokeObjectURL(url), 0);
+/** 二进制内容的 data: URL 兜底：文本那套 encodeURIComponent 会把字节改写掉 */
+function base64Of(bytes: Uint8Array): string {
+  /**
+   * 分块拼二进制字符串再 btoa。
+   *
+   * 一次性 `String.fromCharCode(...bytes)` 会在几十万字节时炸调用栈 ——
+   * 分章导出的 zip 动辄上 MB，而这条兜底路径本来就是在「下载可能失败」时用的，
+   * 不能在这里再赌一次。
+   */
+  const CHUNK = 0x8000;
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + CHUNK));
   }
+  return btoa(binary);
+}
+
+/** 触发浏览器下载一个二进制文件（如分章导出的 zip） */
+export function saveBinaryFile(name: string, bytes: Uint8Array, mime: string): void {
+  /**
+   * 与 saveTextFile 同一套降级：先 blob，失败退回 data URL。
+   * 二进制必须用 base64 变体，否则 data URL 里的字节会被当字符处理。
+   */
+  let url: string;
+  try {
+    url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mime }));
+  } catch {
+    url = `data:${mime};base64,${base64Of(bytes)}`;
+  }
+  triggerDownload(url, name);
 }
 
 /** 复制到剪贴板。返回是否成功，调用方据此给提示 */
