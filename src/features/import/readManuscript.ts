@@ -7,6 +7,8 @@
  * 所以这里自己拿字节做编码探测。
  */
 
+import { extractRtfText, isRtfMarkup } from './rtf';
+
 export type ManuscriptEncoding = 'utf-8' | 'gb18030' | 'utf-16le' | 'utf-16be';
 
 export const ENCODING_LABELS: Record<ManuscriptEncoding, string> = {
@@ -19,6 +21,8 @@ export const ENCODING_LABELS: Record<ManuscriptEncoding, string> = {
 export interface ManuscriptReadResult {
   text: string;
   encoding: ManuscriptEncoding;
+  /** 纯文本还是从 RTF 提取出来的（.rtf 或改名成 .txt 的 RTF 都会走提取） */
+  format: 'text' | 'rtf';
   /**
    * 解码后仍存在无法识别的字节（U+FFFD）。
    * 不阻止导入 —— 几十万字里错几个字符，用户自己改比被拒之门外好得多，
@@ -27,8 +31,11 @@ export interface ManuscriptReadResult {
   lossy: boolean;
 }
 
-/** 纯文本格式。刻意不收 .docx：它是个 zip，解压要额外依赖，而「另存为 txt」是一步操作 */
-export const ACCEPTED_EXTENSIONS = ['.txt', '.text', '.md', '.markdown'] as const;
+/**
+ * 纯文本与 RTF。刻意不收 .docx：它是个 zip，解压要额外依赖，而「另存为 txt」是一步操作；
+ * .rtf 是文本标记，可以直接提取纯文本（见 rtf.ts），中文作者手里的 Word 旧稿很多是这个格式
+ */
+export const ACCEPTED_EXTENSIONS = ['.txt', '.text', '.md', '.markdown', '.rtf'] as const;
 
 /** 20 MB 约等于一千万汉字，比任何单本小说都宽裕 */
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -42,15 +49,10 @@ function extensionOf(name: string): string {
 export function checkManuscriptFile(file: { name: string; size: number }): string | undefined {
   const extension = extensionOf(file.name);
   if (!ACCEPTED_EXTENSIONS.includes(extension as (typeof ACCEPTED_EXTENSIONS)[number])) {
-    if (
-      extension === '.doc' ||
-      extension === '.docx' ||
-      extension === '.rtf' ||
-      extension === '.pdf'
-    ) {
-      return `暂不支持 ${extension} 文件，请在原软件里「另存为」纯文本（.txt）后再上传`;
+    if (extension === '.doc' || extension === '.docx' || extension === '.pdf') {
+      return `暂不支持 ${extension} 文件，请在原软件里「另存为」纯文本（.txt 或 .rtf）后再上传`;
     }
-    return '只支持 .txt 与 .md 纯文本文件';
+    return '只支持 .txt、.md 与 .rtf 文件';
   }
   if (file.size === 0) return '这个文件是空的';
   if (file.size > MAX_FILE_BYTES) {
@@ -138,12 +140,12 @@ export function decodeManuscript(buffer: ArrayBuffer): ManuscriptReadResult {
 
 function finish(raw: string, encoding: ManuscriptEncoding): ManuscriptReadResult {
   const text = normalizeManuscript(raw);
-  return { text, encoding, lossy: text.includes('\uFFFD') };
+  return { text, encoding, format: 'text', lossy: text.includes('\uFFFD') };
 }
 
 export class ManuscriptReadError extends Error {}
 
-/** 读取用户选择的稿件文件 */
+/** 读取用户选择的稿件文件。.rtf（以及被改名成 .txt 的 RTF）会自动提取成纯文本 */
 export async function readManuscriptFile(file: File): Promise<ManuscriptReadResult> {
   const problem = checkManuscriptFile(file);
   if (problem) throw new ManuscriptReadError(problem);
@@ -156,6 +158,23 @@ export async function readManuscriptFile(file: File): Promise<ManuscriptReadResu
   }
 
   const result = decodeManuscript(buffer);
+
+  // RTF 文件本身是 7-bit ASCII 标记，上面的编码探测会把它当 UTF-8 读出来；
+  // 靠内容判断而不是扩展名 —— 改名保存的 RTF 也能识别
+  if (isRtfMarkup(result.text)) {
+    const extracted = extractRtfText(result.text);
+    const text = normalizeManuscript(extracted.text);
+    if (!text.trim()) {
+      throw new ManuscriptReadError('这个 RTF 文件里没有可读的文字');
+    }
+    return {
+      text,
+      encoding: result.encoding,
+      format: 'rtf',
+      lossy: result.lossy || extracted.lossy,
+    };
+  }
+
   if (!result.text.trim()) {
     throw new ManuscriptReadError('这个文件里没有可读的文字，可能不是纯文本');
   }

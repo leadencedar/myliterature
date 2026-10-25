@@ -572,6 +572,18 @@ describe('上传稿件文件', () => {
     expect(await screen.findByText(/识别为 UTF-8/u)).toBeInTheDocument();
   });
 
+  it('.rtf 上传后自动提取纯文本，并说明来源', async () => {
+    const user = await openPaste();
+    const markup =
+      '{\\rtf1\\ansi\\deff0 \\u31532?\\u19968?\\u31456?\\par \\u20320?\\u22909?\\par \\u31532?\\u20108?\\u31456?\\par \\u25105?\\u26469?\\u20102?}';
+
+    await user.upload(screen.getByLabelText('稿件文件'), textFile('归墟纪.rtf', markup));
+
+    expect(await screen.findByLabelText('旧稿正文')).toHaveValue('第一章\n你好\n第二章\n我来了');
+    expect(screen.getByText(/已从 RTF 提取纯文本/u)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '下一步：切分章节' })).toBeEnabled();
+  });
+
   it('多个文件按选择顺序依次追加，而不是互相覆盖', async () => {
     const user = await openPaste();
     const input = screen.getByLabelText('稿件文件');

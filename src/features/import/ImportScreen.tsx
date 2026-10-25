@@ -451,7 +451,10 @@ export function ImportScreen({ novel, categories, onClose }: ImportScreenProps) 
       );
       setSources((previous) => [...previous, file.name]);
 
-      const notes = [`已读入《${file.name}》，识别为 ${ENCODING_LABELS[result.encoding]}`];
+      const notes =
+        result.format === 'rtf'
+          ? [`已读入《${file.name}》，已从 RTF 提取纯文本`]
+          : [`已读入《${file.name}》，识别为 ${ENCODING_LABELS[result.encoding]}`];
       if (result.lossy) {
         // 不因为几个坏字节拒绝整本书，但必须说清楚，否则用户会以为是自己当年写错了
         notes.push('其中少量字符无法识别，已用 � 占位，可以在下一步或正文里改掉');
@@ -1695,7 +1698,7 @@ export function ImportScreen({ novel, categories, onClose }: ImportScreenProps) 
                   }}
                 />
                 <p className="text-xs leading-relaxed text-ink-500">
-                  支持 .txt 与 .md，自动识别 UTF-8 与 GB18030 编码
+                  支持 .txt、.md 与 .rtf（RTF 自动提取纯文本），自动识别 UTF-8 与 GB18030 编码
                   <span className="hidden lg:inline"> · 也可以直接把文件拖进来</span>
                 </p>
                 <p className="text-xs leading-relaxed text-ink-300">

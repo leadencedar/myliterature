@@ -83,10 +83,11 @@ function draftFrom(norm: WritingNorm | undefined, seed: NormFileSeed | undefined
 
 /** 读入提示行：编码识别结果要让作者看见，GB18030 被当成 UTF-8 时第一眼就能发现 */
 export function fileNotice(fileName: string, result: ManuscriptReadResult): string {
-  return (
-    `已读入《${fileName}》，识别为 ${ENCODING_LABELS[result.encoding]}` +
-    (result.lossy ? '。其中少量字符无法识别，已用 � 占位' : '')
-  );
+  const prefix =
+    result.format === 'rtf'
+      ? `已读入《${fileName}》，已从 RTF 提取纯文本`
+      : `已读入《${fileName}》，识别为 ${ENCODING_LABELS[result.encoding]}`;
+  return prefix + (result.lossy ? '。其中少量字符无法识别，已用 � 占位' : '');
 }
 
 /** 把异常转成给作者看的中文：ZodError 的 message 是 JSON，绝不能原样显示 */

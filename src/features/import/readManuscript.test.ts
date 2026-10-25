@@ -54,6 +54,7 @@ describe('编码探测', () => {
     expect(decodeManuscript(buffer)).toEqual({
       text: '第一章',
       encoding: 'utf-8',
+      format: 'text',
       lossy: false,
     });
   });
@@ -102,7 +103,12 @@ describe('编码探测', () => {
   });
 
   it('空文件不炸', () => {
-    expect(decodeManuscript(bytes())).toEqual({ text: '', encoding: 'utf-8', lossy: false });
+    expect(decodeManuscript(bytes())).toEqual({
+      text: '',
+      encoding: 'utf-8',
+      format: 'text',
+      lossy: false,
+    });
   });
 
   it('确实有坏字节时标记 lossy，但不丢掉其余内容', () => {
@@ -116,10 +122,11 @@ describe('编码探测', () => {
 });
 
 describe('文件体检', () => {
-  it('接受 txt 与 md', () => {
+  it('接受 txt、md 与 rtf', () => {
     expect(checkManuscriptFile({ name: '归墟纪.txt', size: 100 })).toBeUndefined();
     expect(checkManuscriptFile({ name: '归墟纪.MD', size: 100 })).toBeUndefined();
     expect(checkManuscriptFile({ name: 'a.markdown', size: 100 })).toBeUndefined();
+    expect(checkManuscriptFile({ name: '归墟纪.RTF', size: 100 })).toBeUndefined();
   });
 
   it('Word / PDF 给出「另存为纯文本」的具体指引', () => {
@@ -129,7 +136,7 @@ describe('文件体检', () => {
 
   it('其他格式直接说明只收纯文本', () => {
     expect(checkManuscriptFile({ name: '封面.png', size: 100 })).toBe(
-      '只支持 .txt 与 .md 纯文本文件',
+      '只支持 .txt、.md 与 .rtf 文件',
     );
     expect(checkManuscriptFile({ name: '没有扩展名', size: 100 })).toBeTruthy();
   });
@@ -160,6 +167,36 @@ describe('读取文件', () => {
     );
     expect(result.text).toBe('第一章\n你好');
     expect(result.encoding).toBe('gb18030');
+    expect(result.format).toBe('text');
+  });
+
+  it('.rtf 提取成纯文本：\\par 是换行、\\uN 是汉字', async () => {
+    const markup = '{\\rtf1\\ansi\\deff0 \\u31532?\\u19968?\\u31456?\\par \\u20320?\\u22909?}';
+    const result = await readManuscriptFile(file('归墟纪.rtf', utf8(markup)));
+    expect(result.format).toBe('rtf');
+    expect(result.text).toBe('第一章\n你好');
+    expect(result.lossy).toBe(false);
+  });
+
+  it('老式 GBK 转义的 RTF 也能解出中文', async () => {
+    const markup =
+      "{\\rtf1\\ansi\\ansicpg936 \\'b5\\'da\\'d2\\'bb\\'d5\\'c2\\par \\'c4\\'e3\\'ba\\'c3}";
+    const result = await readManuscriptFile(file('旧稿.rtf', utf8(markup)));
+    expect(result.format).toBe('rtf');
+    expect(result.text).toBe('第一章\n你好');
+  });
+
+  it('被改名成 .txt 的 RTF 按内容识别，照样提取', async () => {
+    const markup = '{\\rtf1\\ansi 改名保存的\\par 老稿子}';
+    const result = await readManuscriptFile(file('老稿子.txt', utf8(markup)));
+    expect(result.format).toBe('rtf');
+    expect(result.text).toBe('改名保存的\n老稿子');
+  });
+
+  it('RTF 里没有任何正文时同样拦下', async () => {
+    await expect(
+      readManuscriptFile(file('空.rtf', utf8('{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Arial;}}}'))),
+    ).rejects.toThrow(/没有可读的文字/u);
   });
 
   it('格式不对时抛出可以直接展示给用户的错误', async () => {
