@@ -254,10 +254,11 @@ export function ExportSheet({
         label="范围"
         value={scope}
         options={[
-          { value: 'novel', label: '全书' },
+          // 「打包」是整本带走的主路径，放最前；单文件导出按「用的频率」排在后面
+          { value: 'pack', label: '打包' },
           { value: 'chapter', label: '单章' },
           ...(sideStories.length > 0 ? [{ value: 'side' as const, label: '外传' }] : []),
-          { value: 'pack', label: '打包' },
+          { value: 'novel', label: '全书' },
         ]}
         onChange={(next) => {
           // 只有外传的作品切到打包时，主线一个文件都列不出来 —— 直接把外传打开

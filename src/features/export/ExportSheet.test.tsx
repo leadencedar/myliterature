@@ -80,6 +80,18 @@ function renderSheet(defaultChapterId?: string) {
 }
 
 describe('范围与格式', () => {
+  it('范围顺序：打包在最前、全书在最后', () => {
+    renderSheet();
+    const dialog = screen.getByRole('dialog');
+    const scope = within(dialog).getByRole('group', { name: '范围' });
+
+    expect(
+      within(scope)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['打包', '单章', '全书']);
+  });
+
   it('默认导出全书，预览带书名与全部章节', async () => {
     renderSheet();
     const dialog = screen.getByRole('dialog');
@@ -312,6 +324,17 @@ describe('外传', () => {
     const { dialog } = renderWithSides(CHAPTERS, []);
     expect(within(dialog).queryByRole('button', { name: '外传' })).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('附带外传')).not.toBeInTheDocument();
+  });
+
+  it('有外传时范围顺序是 打包 / 单章 / 外传 / 全书', () => {
+    const { dialog } = renderWithSides();
+    const scope = within(dialog).getByRole('group', { name: '范围' });
+
+    expect(
+      within(scope)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['打包', '单章', '外传', '全书']);
   });
 
   it('只有外传的作品打开面板时默认范围是「外传」', () => {
