@@ -797,6 +797,40 @@ export const ImportChapterStateSchema = z.object({
 export type ImportChapterState = z.infer<typeof ImportChapterStateSchema>;
 
 /** 选目的地之前的分章草稿：正文、翻译状态与原文都在这里，不落 Chapter */
+/** 译名对照。文学翻译里人名跑风最刺眼，所以要跨章累计并强制沿用 */
+export const GlossaryEntrySchema = z.object({
+  source: z.string().min(1),
+  target: z.string().min(1),
+});
+export type GlossaryEntryData = z.infer<typeof GlossaryEntrySchema>;
+
+/**
+ * 一章分段翻译计划里的一段。译文与这一段定下的译名都落在这里 ——
+ * 分段翻译可能跑十几分钟，刷新、关面板都不该让已付费的段落重跑。
+ */
+export const TranslationSegmentSchema = z.object({
+  /** 段内序号，从 1 起 */
+  index: z.number().int().positive(),
+  /** 原文片段（含段内原有的换行结构） */
+  sourceText: z.string(),
+  /** 拼回整章时这一段之前要放的分隔（原文里的空行等）；首段为 '' */
+  separatorBefore: z.string().default(''),
+  status: z.enum(['pending', 'done']).default('pending'),
+  /** 已完成的译文 */
+  translation: z.string().default(''),
+  /** 这一段定下的译名（按出现顺序）。重试这一段时先回滚这部分贡献，先到先得才不被污染 */
+  glossary: z.array(GlossaryEntrySchema).default([]),
+});
+export type TranslationSegment = z.infer<typeof TranslationSegmentSchema>;
+
+/** 一章的分段翻译计划。旧草稿没有这个字段（undefined = 还没切过段） */
+export const TranslationPlanSchema = z.object({
+  /** 切段时的原文指纹：正文变了就丢弃旧计划重新切 */
+  sourceHash: z.string(),
+  segments: z.array(TranslationSegmentSchema),
+});
+export type TranslationPlan = z.infer<typeof TranslationPlanSchema>;
+
 export const ImportDraftSchema = z.object({
   /** 本批序号（分章页的「第 N 章」） */
   index: z.number().int().positive(),
@@ -808,6 +842,8 @@ export const ImportDraftSchema = z.object({
   sourceLanguage: z.string().default(''),
   translateStatus: ImportTranslateStatusSchema.default('none'),
   translateError: z.string().default(''),
+  /** 长章自动分段翻译的进度；没有就是还没开始译（或旧数据） */
+  translationPlan: TranslationPlanSchema.optional(),
 });
 export type ImportDraft = z.infer<typeof ImportDraftSchema>;
 
@@ -854,13 +890,6 @@ export const ImportEntryDraftSchema = z.object({
   sourceChapterIds: z.array(IdSchema).default([]),
 });
 export type ImportEntryDraft = z.infer<typeof ImportEntryDraftSchema>;
-
-/** 译名对照。文学翻译里人名跑风最刺眼，所以要跨章累计并强制沿用 */
-export const GlossaryEntrySchema = z.object({
-  source: z.string().min(1),
-  target: z.string().min(1),
-});
-export type GlossaryEntryData = z.infer<typeof GlossaryEntrySchema>;
 
 /**
  * 作品级译名表，一书一份。

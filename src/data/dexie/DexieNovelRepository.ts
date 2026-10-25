@@ -1560,7 +1560,12 @@ export class DexieNovelRepository implements NovelRepository {
       patch: Partial<
         Pick<
           ImportDraft,
-          'content' | 'sourceContent' | 'sourceLanguage' | 'translateStatus' | 'translateError'
+          | 'content'
+          | 'sourceContent'
+          | 'sourceLanguage'
+          | 'translateStatus'
+          | 'translateError'
+          | 'translationPlan'
         >
       >;
     }[],
@@ -1587,6 +1592,7 @@ export class DexieNovelRepository implements NovelRepository {
         if (patch.sourceLanguage !== undefined) next.sourceLanguage = patch.sourceLanguage;
         if (patch.translateStatus !== undefined) next.translateStatus = patch.translateStatus;
         if (patch.translateError !== undefined) next.translateError = patch.translateError;
+        if (patch.translationPlan !== undefined) next.translationPlan = patch.translationPlan;
         drafts[at] = next;
       }
       const saved = ImportJobSchema.parse({ ...job, drafts, updatedAt: now() });

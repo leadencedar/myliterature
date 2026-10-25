@@ -838,7 +838,7 @@ describe('外文稿件的翻译步骤', () => {
     // 同一个人在第五章换个名字，读者会以为是两个人
     expect(userMessage).toContain('【已定译名（必须沿用，不得另起译法）】');
     expect(userMessage).toContain('Ashford => 阿什福德');
-    // 上一章译文的结尾用来接住语感
+    // 上一章译文的结尾用来接住语感（单段章节沿用整章提示词）
     expect(userMessage).toContain('【上一章译文的结尾');
   });
 
@@ -931,6 +931,154 @@ describe('外文稿件的翻译步骤', () => {
   });
 });
 
+describe('长章自动分段翻译', () => {
+  /** 两段各约 2200–2900 字符：放不进一段（3000 预算），正好切成两段；两段都提到 Ashford */
+  const LONG_PARAGRAPH_A = 'Ashford walked on. '.repeat(120);
+  const LONG_PARAGRAPH_B = 'Ashford waited by the water. '.repeat(100);
+  const LONG_MANUSCRIPT = ['Chapter 1', LONG_PARAGRAPH_A, '', LONG_PARAGRAPH_B].join('\n');
+
+  /** 每段译文 ≥ 原文 20%，否则会被长度校验拦下（这本身也是要守住的防线） */
+  const SEG1_TEXT = '阿什福德继续往前走。'.repeat(48);
+  const SEG2_TEXT = '他在水边等待。'.repeat(110);
+  const SEG1 = [SEG1_TEXT, GLOSSARY_DELIMITER, 'Ashford => 阿什福德'].join('\n');
+  const SEG2 = [SEG2_TEXT, GLOSSARY_DELIMITER, 'Ashford => 阿什福德'].join('\n');
+
+  /** 按顺序应答流式翻译请求；用完了就一直重复最后一个 */
+  function stubStreamSequence(responses: string[]) {
+    const queue = [...responses];
+    const spy = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body ?? '{}')) as { stream?: boolean };
+      if (request.stream) {
+        const text = queue.shift() ?? responses[responses.length - 1] ?? '';
+        return Promise.resolve(sseResponse(textDeltaEvents(text ? [text] : [])));
+      }
+      return Promise.resolve(
+        jsonResponse(
+          completion(
+            JSON.stringify({
+              entries: [],
+              summary: '',
+              keyEvents: [],
+              appearingEntries: [],
+              newOpenThreads: [],
+              resolvedThreads: [],
+              rollingSummary: '',
+            }),
+          ),
+        ),
+      );
+    });
+    vi.stubGlobal('fetch', spy);
+    return spy;
+  }
+
+  async function reachTranslateOf(manuscript: string, responses: string[]) {
+    const spy = stubStreamSequence(responses);
+    const { user, view } = await pasteManuscript(manuscript);
+    await screen.findByText(/切出 1 章/u);
+    await user.click(screen.getByRole('button', { name: '下一步：翻译（1 章）' }));
+    await screen.findByText(/已翻译 0 \/ 1 章/u);
+    return { user, spy, view };
+  }
+
+  it('长章按段落切成两段逐段翻译，拼接后落库，计划持久化', async () => {
+    const { user, spy } = await reachTranslateOf(LONG_MANUSCRIPT, [SEG1, SEG2]);
+
+    await user.click(screen.getByRole('button', { name: /开始翻译（1 章）/u }));
+    await screen.findByText(/已翻译 1 \/ 1 章/u);
+
+    // 两段两次调用；第二段的 prompt 带上第一段定下的译名与段位置
+    expect(spy).toHaveBeenCalledTimes(2);
+    const secondBody = JSON.parse(String(spy.mock.calls[1]![1]?.body)) as {
+      messages: { role: string; content: string }[];
+    };
+    const secondUser = secondBody.messages.find((message) => message.role === 'user')!.content;
+    expect(secondUser).toContain('Ashford => 阿什福德');
+    expect(secondUser).toContain('第 2/2 段');
+
+    // 拼接时把段间的空行放回原位，译文里两段之间是一个空行
+    const rows = (await harness.repository.getImportJob(novel.id))?.drafts ?? [];
+    expect(rows[0]?.content).toBe(`${SEG1_TEXT}\n\n${SEG2_TEXT}`);
+    expect(rows[0]?.translateStatus).toBe('done');
+    expect(rows[0]?.sourceContent).toContain('Ashford walked on.');
+
+    // 计划留在草稿上：两段都完成，各自带着译文与译名贡献
+    const plan = rows[0]?.translationPlan;
+    expect(plan?.segments.map((segment) => segment.status)).toEqual(['done', 'done']);
+    expect(plan?.segments[0]?.translation).toBe(SEG1_TEXT);
+    expect(plan?.segments[1]?.separatorBefore).toBe('\n\n');
+
+    // 译名跨段一致：两段都产出 Ashford，作品级表里只有一条
+    const glossary = await harness.repository.getGlossary(novel.id);
+    expect(glossary?.terms).toEqual([{ source: 'Ashford', target: '阿什福德' }]);
+  });
+
+  it('中途失败：已成功的段保留，重试只重跑失败段，译名累计不被污染', async () => {
+    const { user, spy } = await reachTranslateOf(LONG_MANUSCRIPT, [SEG1, '']);
+
+    await user.click(screen.getByRole('button', { name: /开始翻译（1 章）/u }));
+    expect(await screen.findByText(/第 2\/2 段没有返回译文/u)).toBeInTheDocument();
+    expect(spy).toHaveBeenCalledTimes(2);
+
+    // 第一段译文与译名都已落盘；失败段没有贡献译名
+    const failedJob = (await harness.repository.getImportJob(novel.id))!;
+    const failedPlan = failedJob.drafts[0]!.translationPlan!;
+    expect(failedPlan.segments.map((segment) => segment.status)).toEqual(['done', 'pending']);
+    expect(failedPlan.segments[0]!.translation).toBe(SEG1_TEXT);
+    expect(failedPlan.segments[0]!.glossary).toEqual([{ source: 'Ashford', target: '阿什福德' }]);
+    // 作品级译名表还空着：半章不落库
+    expect((await harness.repository.getGlossary(novel.id))?.terms ?? []).toEqual([]);
+
+    // 重试：换一个能成功的第二段
+    const queue = [SEG2];
+    const retrySpy = stubStreamSequence(queue);
+    await user.click(screen.getByRole('button', { name: '重试' }));
+    await screen.findByText(/已翻译 1 \/ 1 章/u);
+
+    // 第一段没有重跑：重试只多一次调用
+    expect(retrySpy).toHaveBeenCalledTimes(1);
+    const retryBody = JSON.parse(String(retrySpy.mock.calls[0]![1]?.body)) as {
+      messages: { role: string; content: string }[];
+    };
+    const retryUser = retryBody.messages.find((message) => message.role === 'user')!.content;
+    // 重试第二段时，第一段定下的译名仍在约束里
+    expect(retryUser).toContain('Ashford => 阿什福德');
+    expect(retryUser).toContain('第 2/2 段');
+
+    const done = (await harness.repository.getImportJob(novel.id))?.drafts[0];
+    expect(done?.content).toBe(`${SEG1_TEXT}\n\n${SEG2_TEXT}`);
+    expect((await harness.repository.getGlossary(novel.id))?.terms).toEqual([
+      { source: 'Ashford', target: '阿什福德' },
+    ]);
+  });
+
+  it('翻译中途关掉面板再打开：从失败的段接着跑，已付费的段不重跑', async () => {
+    const { user, view, spy } = await reachTranslateOf(LONG_MANUSCRIPT, [SEG1, '']);
+
+    await user.click(screen.getByRole('button', { name: /开始翻译（1 章）/u }));
+    await screen.findByText(/第 2\/2 段没有返回译文/u);
+    expect(spy).toHaveBeenCalledTimes(2);
+
+    // 「关掉面板」：卸载后重开，进度从库里恢复
+    view.unmount();
+    stubStreamSequence([SEG2]);
+    const second = userEvent.setup();
+    renderImport();
+    // 失败章重开后是「重试」入口，从库里读回的分段计划接着跑
+    await screen.findByText(/已翻译 0 \/ 1 章/u);
+    await second.click(await screen.findByRole('button', { name: '重试' }));
+    await screen.findByText(/已翻译 1 \/ 1 章/u);
+
+    const done = (await harness.repository.getImportJob(novel.id))?.drafts[0];
+    expect(done?.content).toBe(`${SEG1_TEXT}\n\n${SEG2_TEXT}`);
+    // 只补跑失败的那一段：整个流程共 3 次调用（第 1 段、失败的第 2 段、重跑的第 2 段）
+    expect(done?.translationPlan?.segments.map((segment) => segment.status)).toEqual([
+      'done',
+      'done',
+    ]);
+  });
+});
+
 describe('跨多次导入的译名一致性', () => {
   /** 第一批：两章英文 */
   const BATCH_ONE = [
@@ -947,14 +1095,22 @@ describe('跨多次导入的译名一致性', () => {
     'Ashford climbed the ridge above Greymoor and counted the lights in the valley below.',
   ].join('\n');
 
-  const T1 = ['阿什福德在黎明前背起行囊。', '---译名表---', 'Ashford => 阿什福德'].join('\n');
+  const T1 = [
+    '阿什福德在黎明前背起了行囊，把渔村留在了身后。',
+    '---译名表---',
+    'Ashford => 阿什福德',
+  ].join('\n');
   const T2 = [
-    '灰沼渡口的雨下了三天。',
+    '灰沼渡口的雨已经下了三天，阿什福德一直等在雨棚下。',
     '---译名表---',
     'Ashford => 阿什福德',
     'Greymoor => 灰沼',
   ].join('\n');
-  const T3 = ['阿什福德爬上灰沼上方的山脊。', '---译名表---', 'Ashford => 阿什福德'].join('\n');
+  const T3 = [
+    '阿什福德爬上灰沼上方的山脊，数着山谷里的灯火。',
+    '---译名表---',
+    'Ashford => 阿什福德',
+  ].join('\n');
 
   const EXTRACTION = JSON.stringify({
     entries: [],

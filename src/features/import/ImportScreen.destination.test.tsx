@@ -73,11 +73,13 @@ const ENGLISH = [
 
 const T1 = [
   '阿什福德在黎明前背起了行囊，把渔村留在身后。',
+  '渔村的雾压得很低，他摸了摸胸前的玉，转身没有回头。',
   GLOSSARY_DELIMITER,
   'Ashford => 阿什福德',
 ].join('\n');
 const T2 = [
   '灰沼渡口的雨下了三天，阿什福德在雨篷下等着。',
+  '他听着水声，数着自己还剩下什么可以换钱。',
   GLOSSARY_DELIMITER,
   'Ashford => 阿什福德',
   'Greymoor => 灰沼',
@@ -475,14 +477,18 @@ describe('外文稿：草稿上的翻译', () => {
     const notes = screen.getAllByRole('note');
     expect(notes).toHaveLength(1);
     expect(notes[0]).toHaveTextContent(
-      '这一章较长，单次翻译可能被截断，建议换一种分章方式或用自定义正则切小',
+      '这一章较长，翻译时会自动分段进行；如果想按剧情节奏切小，也可以在这里调整',
     );
     expect(notes[0]!.closest('li')).toHaveTextContent('第 1 章');
   });
 
   it('旧实例迟到的写回不会把已译章节改回原文，草稿数量不变', async () => {
     const stale = deferred();
-    const OLD = ['旧实例的译文。', GLOSSARY_DELIMITER, 'Fogvale => 雾谷'].join('\n');
+    const OLD = [
+      '旧实例翻译的完整译文，把整段原文都译了出来。',
+      GLOSSARY_DELIMITER,
+      'Fogvale => 雾谷',
+    ].join('\n');
     stubLlm({
       translate: (call, body) => {
         // 第一次请求挂起，不理会 abort（模拟请求已经返回、来不及中止）
@@ -579,6 +585,7 @@ describe('外文稿：草稿上的翻译', () => {
   it('译文写回时存储出错（任务仍是这批草稿）：显示 alert、循环停下，这一章仍待译', async () => {
     const spy = stubLlm({ translate: () => translationReply(T1) });
     const { user } = await reachTranslate(ENGLISH);
+    // 分段翻译的第一笔写入是切段计划（在任何请求之前）：存储错误在花钱之前就把循环拦下
     vi.spyOn(harness.repository, 'patchImportDrafts').mockRejectedValueOnce(
       new Error('QuotaExceededError'),
     );
@@ -586,10 +593,10 @@ describe('外文稿：草稿上的翻译', () => {
     await user.click(screen.getByRole('button', { name: '开始翻译（2 章）' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      '第 1 章的译文没存上：QuotaExceededError。浏览器存储可能已满，可以先导出备份。',
+      '第 1 章的翻译没存上：QuotaExceededError。浏览器存储可能已满，可以先导出备份。',
     );
-    // 循环停下，没有接着烧第二章
-    expect(translateBodies(spy)).toHaveLength(1);
+    // 循环停下，一次模型请求都没发出，没有烧钱
+    expect(translateBodies(spy)).toHaveLength(0);
     expect(await screen.findByRole('button', { name: '开始翻译（2 章）' })).toBeEnabled();
     expect(screen.getByText(/已翻译 0 \/ 2 章/u)).toBeInTheDocument();
     const job = await currentJob();

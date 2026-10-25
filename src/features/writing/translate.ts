@@ -1,5 +1,5 @@
-import { dedupeGlossary, type GlossaryEntry } from '@/domain/glossary';
-import type { Chapter, Novel, StyleProfile } from '@/domain/schema';
+import { dedupeGlossary, mergeGlossary, type GlossaryEntry } from '@/domain/glossary';
+import type { Chapter, Novel, StyleProfile, TranslationSegment } from '@/domain/schema';
 import { composeSections, composeStylePrefix } from '@/prompt/sections';
 
 export type { GlossaryEntry };
@@ -26,6 +26,15 @@ export type { GlossaryEntry };
  * 供导入分章页提示用户把超长章切小，编辑器那边以后要提示也能复用。
  */
 export const TRANSLATE_SOFT_LIMIT = 6000;
+
+/**
+ * 自动分段翻译的单段预算（原文字符数）。
+ *
+ * 3000 字符的英文原文译成中文大约 2000 字出头、2500 token 左右，落在多数服务商
+ * 默认输出上限（约 4k token）之内，还留了译名表尾巴的余量。分段之后，
+ * `TRANSLATE_SOFT_LIMIT` 只是分章页「建议切小」的提示线，不再是截断风险线。
+ */
+export const SEGMENT_BUDGET = 3000;
 
 /** 译文与译名表的分隔行。要求模型原样输出 */
 export const GLOSSARY_DELIMITER = '---译名表---';
@@ -124,6 +133,8 @@ export function buildTranslateUserPrompt(params: {
   glossary: GlossaryEntry[];
   /** 上一章译文的结尾，用来接住语感 */
   previousTranslatedTail?: string;
+  /** 章内分段翻译时的段位置；不传就是整章一次译 */
+  segment?: { index: number; total: number };
 }): string {
   const blocks: string[] = [];
 
@@ -137,28 +148,246 @@ export function buildTranslateUserPrompt(params: {
   }
 
   if (params.previousTranslatedTail?.trim()) {
-    blocks.push(
-      [
-        '【上一章译文的结尾（仅供接住语感，不要续写它）】',
-        params.previousTranslatedTail.trim(),
-      ].join('\n'),
-    );
+    // 分段路径用「上一段」，整章路径保持「上一章」—— 后者是既有 prompt 的字节级基线，
+    // 没有分段的任务输出必须与改动前逐字节相同（noScenarioBaseline 守着这条线）
+    const tailHeader = params.segment
+      ? '【上一段译文的结尾（仅供接住语感，不要复述或续写它）】'
+      : '【上一章译文的结尾（仅供接住语感，不要续写它）】';
+    blocks.push([tailHeader, params.previousTranslatedTail.trim()].join('\n'));
   }
 
+  const segmentLabel = params.segment
+    ? ` · 第 ${params.segment.index}/${params.segment.total} 段`
+    : '';
   blocks.push(
     [
-      `【待翻译的原文（第 ${params.index} 章${params.title ? ` ${params.title}` : ''}）】`,
+      `【待翻译的原文（第 ${params.index} 章${params.title ? ` ${params.title}` : ''}${segmentLabel}）】`,
       params.sourceText.trim(),
     ].join('\n'),
   );
 
+  if (params.segment) {
+    blocks.push(
+      [
+        '【分段说明】',
+        `本章共 ${params.segment.total} 段，现在只翻译上面这一段的**全部**内容，`,
+        '从第一句译到最后一句：不要提前结束，也不要译到这一段之外的内容。',
+      ].join('\n'),
+    );
+  }
+
   return composeSections(blocks);
+}
+
+/**
+ * 章内分段翻译的累计译名：作品级译名表 + 各已完成段定下的译名，先到先得。
+ *
+ * 这是「分段之后译名表一致」的机制核心：第 k 段的提示词只从这里取译名，
+ * 同一专名在段与段之间永远沿用第一个出现的译法；后段想改译法也改不动。
+ * 重试某一段前，先把它在 plan 里的 glossary 清掉（回滚贡献），
+ * 否则被放弃的那次尝试的译名会占住先到先得的位置。
+ */
+export function accumulatedGlossary(
+  segments: Pick<TranslationSegment, 'status' | 'glossary'>[],
+  base: GlossaryEntry[],
+): GlossaryEntry[] {
+  let merged = mergeGlossary(base, []);
+  for (const segment of segments) {
+    if (segment.status !== 'done') continue;
+    merged = mergeGlossary(merged, segment.glossary);
+  }
+  return merged;
 }
 
 /** 取一章译文的结尾若干字，供下一章接住语感 */
 export function translatedTail(text: string, limit = 300): string {
   const trimmed = text.trim();
   return trimmed.length <= limit ? trimmed : trimmed.slice(-limit);
+}
+
+// ---------------------------------------------------------------- 章内自动分段
+
+export interface TranslationSegmentSpec {
+  /** 这一段要译的原文（含段内原有的换行结构） */
+  text: string;
+  /** 拼回整章时，这一段之前要放的分隔（原文里的空行等）；首段为 '' */
+  separatorBefore: string;
+}
+
+/** 围栏代码块开头：``` 或 ~~~（允许缩进） */
+const FENCE_OPEN = /^ {0,3}(```+|~~~+)/u;
+
+/** 表格行：以竖线开头。表格是原子结构，拆开会变成一滩竖线 */
+const TABLE_LINE = /^\s*\|/u;
+
+/**
+ * 把一章原文切成适合单次翻译的段。
+ *
+ * 三条安全边界，按此顺序处理：
+ * 1. **围栏代码块与表格是原子**：整块一段，超预算也不拆（拆了模型必然翻坏）；
+ * 2. 段落（空行分隔）之间不拆：段落边界是语义边界，段内换行结构原样保留；
+ * 3. 超预算的段落按**句末标点**切，仍超的才做 grapheme 安全的硬切。
+ *
+ * 拼接时靠 `separatorBefore` 还原原文的空行结构：译文按顺序拼回，
+ * 每段前面放上它自己的分隔，逐字可还原原文布局。
+ */
+export function splitForTranslation(
+  source: string,
+  max = SEGMENT_BUDGET,
+): TranslationSegmentSpec[] {
+  const normalized = source.replace(/\r\n?/gu, '\n');
+  const lines = normalized.split('\n');
+
+  const units: { text: string; sepBefore: string }[] = [];
+  let pendingSep = '';
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i]!;
+
+    // 空行属于「分隔」，攒着留给下一个单元
+    if (line.trim() === '') {
+      pendingSep += `${line}\n`;
+      i += 1;
+      continue;
+    }
+
+    // 围栏代码块：原子单元
+    const fence = FENCE_OPEN.exec(line);
+    if (fence) {
+      const marker = fence[1]!;
+      let j = i + 1;
+      while (j < lines.length && !lines[j]!.trimStart().startsWith(marker)) j += 1;
+      const end = Math.min(j + 1, lines.length);
+      units.push({ text: lines.slice(i, end).join('\n'), sepBefore: pendingSep });
+      pendingSep = '\n'; // 块结束行自带一个换行，是它与下一块之间的分隔
+      i = end;
+      continue;
+    }
+
+    // 表格：连续竖线行整块拿走
+    if (TABLE_LINE.test(line)) {
+      let j = i;
+      while (j < lines.length && TABLE_LINE.test(lines[j]!)) j += 1;
+      units.push({ text: lines.slice(i, j).join('\n'), sepBefore: pendingSep });
+      pendingSep = '\n';
+      i = j;
+      continue;
+    }
+
+    // 普通段落：到空行或下一个特殊块为止
+    let j = i;
+    while (
+      j < lines.length &&
+      lines[j]!.trim() !== '' &&
+      !FENCE_OPEN.test(lines[j]!) &&
+      !TABLE_LINE.test(lines[j]!)
+    ) {
+      j += 1;
+    }
+    for (const piece of splitLongText(lines.slice(i, j).join('\n'), max)) {
+      units.push({ text: piece, sepBefore: pendingSep });
+      pendingSep = '';
+    }
+    pendingSep = '\n';
+    i = j;
+  }
+
+  // 贪心装箱：尽量把单元塞满一段，塞不下就开新段
+  const segments: TranslationSegmentSpec[] = [];
+  let current = '';
+  let separatorBefore = '';
+  for (const unit of units) {
+    const joined = current === '' ? unit.text : current + unit.sepBefore + unit.text;
+    if (current !== '' && joined.length > max) {
+      segments.push({ text: current, separatorBefore });
+      current = unit.text;
+      separatorBefore = unit.sepBefore;
+    } else {
+      current = joined;
+    }
+  }
+  if (current !== '') segments.push({ text: current, separatorBefore });
+  return segments;
+}
+
+/** 句末标点（中英）之后的切点 */
+const SENTENCE_BOUNDARY = /[。！？!?；;…]/gu;
+
+/** 把一段超长文字按句子边界切成 ≤ max 的片，句界不够再硬切 */
+function splitLongText(text: string, max: number): string[] {
+  const pieces: string[] = [];
+  let remaining = text;
+  while (remaining.length > max) {
+    const windowText = remaining.slice(0, max);
+    let cut = -1;
+    let match: RegExpExecArray | null;
+    SENTENCE_BOUNDARY.lastIndex = 0;
+    while ((match = SENTENCE_BOUNDARY.exec(windowText)) !== null) {
+      cut = match.index + match[0].length;
+    }
+    if (cut <= 0) cut = graphemeBoundary(remaining, max);
+    // 防死循环：任何情况下都至少切走 1 个字符
+    pieces.push(remaining.slice(0, Math.max(1, cut)));
+    remaining = remaining.slice(Math.max(1, cut));
+  }
+  if (remaining) pieces.push(remaining);
+  return pieces;
+}
+
+/**
+ * 找 ≤ max 的 grapheme 边界。
+ *
+ * 硬切必须落在字素边界 —— 组合字符（e + 变音符）与 emoji 序列被拦腰切开会
+ * 变成乱码。优先 Intl.Segmenter，退化到码点级（至少不切散代理对）。
+ */
+function graphemeBoundary(text: string, max: number): number {
+  const Segmenter = (Intl as unknown as { Segmenter?: new () => Intl.Segmenter }).Segmenter;
+  if (Segmenter) {
+    let pos = 0;
+    for (const { segment, index } of new Segmenter().segment(text)) {
+      if (index + segment.length > max) return pos;
+      pos = index + segment.length;
+    }
+    return pos;
+  }
+  let end = 0;
+  for (const char of text) {
+    if (end + char.length > max) break;
+    end += char.length;
+  }
+  return end;
+}
+
+/** 把各段译文按 `separatorBefore` 拼回整章，还原原文的空行结构 */
+export function stitchSegments(
+  segments: { translation: string; separatorBefore: string }[],
+): string {
+  return segments
+    .reduce((out, segment) => out + segment.separatorBefore + segment.translation, '')
+    .trim();
+}
+
+/**
+ * 一段译文的长度是否可信。
+ *
+ * 这是**落地前的完整性校验**，不是质量判断：删减了半段、只译了一小部分、
+ * 或者模型复述了指令（超长）都会掉出这个区间，宁可标失败重试也不把
+ * 残缺译文当成功 —— 半截译文过了 parseTranslation 就是「看起来成功了」。
+ */
+export function translationLengthSane(translation: string, source: string): boolean {
+  if (!source.trim() || !translation.trim()) return false;
+  const ratio = translation.trim().length / source.trim().length;
+  return ratio >= 0.2 && ratio <= 3;
+}
+
+/** 轻量指纹：只用于判断「切段后正文有没有变过」，不追求密码学强度 */
+export function hashText(text: string): string {
+  let hash = 5381;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
+  }
+  return (hash >>> 0).toString(36);
 }
 
 /**

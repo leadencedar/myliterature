@@ -12,6 +12,7 @@ import {
   type Novel,
   type Proposal,
   type SideStory,
+  type TranslationPlan,
 } from '@/domain/schema';
 import { relevantGlossary, type GlossaryEntry } from '@/domain/glossary';
 import { detectLanguage, needsTranslationToChinese } from '@/domain/language';
@@ -30,10 +31,15 @@ import { ProposalInbox } from '../proposals/ProposalInbox';
 import { mergeOpenThreads, resolveEntryNames } from '../writing/chapterSummary';
 import {
   TRANSLATE_SOFT_LIMIT,
+  accumulatedGlossary,
   buildTranslateSystemPrompt,
   buildTranslateUserPrompt,
+  hashText,
   parseTranslation,
+  splitForTranslation,
+  stitchSegments,
   translatedTail,
+  translationLengthSane,
 } from '../writing/translate';
 import {
   DestinationPicker,
@@ -736,8 +742,6 @@ export function ImportScreen({ novel, categories, onClose }: ImportScreenProps) 
 
   async function translateOne(draft: ImportDraft): Promise<void> {
     const source = draft.content;
-    setNote(`正在翻译第 ${draft.index} 章…`);
-    setStreamed('');
 
     /**
      * 译文要和后续的中文续写读起来像同一本书，所以带上作品的风格档案。
@@ -748,71 +752,176 @@ export function ImportScreen({ novel, categories, onClose }: ImportScreenProps) 
       (await repository.getStyleProfile(novel.id)) ??
       (await repository.upsertStyleProfile(novel.id, {}));
 
-    const controller = new AbortController();
-    translateAbortRef.current = controller;
-    let streamedText = '';
-    const result = await llm.runStream(
-      'translate-chapter',
-      {
-        system: buildTranslateSystemPrompt(novel, style),
-        user: buildTranslateUserPrompt({
-          index: draft.index,
-          title: draft.title,
-          sourceText: source,
-          // 只给本章用得上的译名，几百条全量注入既贵又稀释注意力
-          glossary: relevantGlossary(glossaryRef.current, source),
-          ...(previousTailRef.current ? { previousTranslatedTail: previousTailRef.current } : {}),
-        }),
-        signal: controller.signal,
-      },
-      {
-        onText: (delta) => {
-          streamedText += delta;
-          if (aliveRef.current) setStreamed(streamedText);
+    // 分段计划：正文没变就沿用库里的（断点续跑，已付费的段不重跑），变了就重新切
+    const sourceHash = hashText(source);
+    let plan: TranslationPlan =
+      draft.translationPlan && draft.translationPlan.sourceHash === sourceHash
+        ? draft.translationPlan
+        : {
+            sourceHash,
+            segments: splitForTranslation(source).map((spec, at) => ({
+              index: at + 1,
+              sourceText: spec.text,
+              separatorBefore: spec.separatorBefore,
+              status: 'pending',
+              translation: '',
+              glossary: [],
+            })),
+          };
+    if (plan !== draft.translationPlan) {
+      if (plan.segments.length > 1) {
+        setNote(`正在切分第 ${draft.index} 章（${plan.segments.length} 段）…`);
+      }
+      await patchDrafts([{ index: draft.index, patch: { translationPlan: plan } }]);
+    }
+
+    const total = plan.segments.length;
+
+    for (const segment of plan.segments) {
+      if (stopRef.current) return;
+      if (segment.status === 'done') continue;
+
+      const at = plan.segments.findIndex((item) => item.index === segment.index);
+      // 单段章节的提示与状态和旧版整章翻译一字不差：只有多段才出现「第 k/N 段」
+      setNote(
+        total > 1
+          ? `正在翻译第 ${draft.index} 章（第 ${segment.index}/${total} 段）…`
+          : `正在翻译第 ${draft.index} 章…`,
+      );
+
+      /**
+       * 这一段用到的译名 = 作品级译名表 + 前面已成功段定下的译名（先到先得）。
+       * 段与段之间译名一致的机制全在这里：后段只会看到前段已经定下的译法，
+       * 提示词里强制沿用，落库的合并规则同样先到先得，双保险。
+       */
+      const doneSoFar = plan.segments.filter((item) => item.status === 'done');
+      const glossary = relevantGlossary(
+        accumulatedGlossary(plan.segments, glossaryRef.current),
+        segment.sourceText,
+      );
+
+      const controller = new AbortController();
+      translateAbortRef.current = controller;
+      let streamedText = '';
+      const result = await llm.runStream(
+        'translate-chapter',
+        {
+          system: buildTranslateSystemPrompt(novel, style),
+          user: buildTranslateUserPrompt({
+            index: draft.index,
+            title: draft.title,
+            sourceText: segment.sourceText,
+            glossary,
+            previousTranslatedTail:
+              at === 0 && previousTailRef.current
+                ? previousTailRef.current
+                : at > 0
+                  ? translatedTail(plan.segments[at - 1]!.translation)
+                  : undefined,
+            // 单段章节沿用整章提示词（与改动前逐字节相同），多段才标注段位置
+            ...(total > 1 ? { segment: { index: segment.index, total } } : {}),
+          }),
+          signal: controller.signal,
         },
-      },
-    );
+        {
+          onText: (delta) => {
+            streamedText += delta;
+            if (aliveRef.current) {
+              setStreamed(
+                stitchSegments(
+                  doneSoFar.map((item) => ({
+                    translation: item.translation,
+                    separatorBefore: item.separatorBefore,
+                  })),
+                ) +
+                  segment.separatorBefore +
+                  streamedText,
+              );
+            }
+          },
+        },
+      );
 
-    /**
-     * 撞上输出上限的半截译文照样能过 parseTranslation。标成已译的话，世界观提交时会清空
-     * drafts、原文就此消失；写成章节也是一章没有任何提示的半截正文。所以当失败处理，不写回。
-     */
-    if (result.finishReason === 'length') {
-      throw new LlmError('parse', '译文超出单次输出上限被截断了', {
-        detail: '这一章太长，回到分章页把它切小一些再译',
-      });
+      /**
+       * 撞上输出上限的半截译文照样能过 parseTranslation，所以当失败处理。
+       * 分段之后这段不会长到撞上限，真撞了也只重试这一段，前面的段不受影响。
+       * 单段章节的文案与旧版一字不差。
+       */
+      if (result.finishReason === 'length') {
+        throw new LlmError(
+          'parse',
+          total > 1
+            ? `第 ${segment.index}/${total} 段超出单次输出上限被截断`
+            : '译文超出单次输出上限被截断了',
+          {
+            detail: total > 1 ? '重试只会重新翻译这一段' : '这一章太长，回到分章页把它切小一些再译',
+          },
+        );
+      }
+
+      const parsed = parseTranslation(result.content || streamedText);
+      if (!parsed.text.trim()) {
+        throw new LlmError(
+          'parse',
+          total > 1 ? `第 ${segment.index}/${total} 段没有返回译文` : '模型没有返回译文',
+        );
+      }
+
+      // 落地前的完整性校验：明显漏译或只译了一小段的，宁可重试也不当成功
+      if (!translationLengthSane(parsed.text, segment.sourceText)) {
+        throw new LlmError(
+          'parse',
+          total > 1
+            ? `第 ${segment.index}/${total} 段译文长度明显异常`
+            : '译文长度明显异常，可能漏译或只译了一部分',
+          total > 1 ? { detail: '可能漏译或只译了一部分，重试只会重新翻译这一段' } : {},
+        );
+      }
+
+      // 这一段付了钱，立刻落盘：译文 + 这一段定下的译名（供后段沿用）
+      plan = {
+        ...plan,
+        segments: plan.segments.map((item) =>
+          item.index === segment.index
+            ? {
+                ...item,
+                status: 'done',
+                translation: parsed.text.trim(),
+                glossary: parsed.glossary,
+              }
+            : item,
+        ),
+      };
+      await patchDrafts([{ index: draft.index, patch: { translationPlan: plan } }]);
     }
 
-    const parsed = parseTranslation(result.content || streamedText);
-    if (!parsed.text.trim()) {
-      throw new LlmError('parse', '模型没有返回译文');
-    }
-
-    // 译文是付了钱的，必须先落盘；原文存进 sourceContent，翻译不可逆，原句必须留得住
+    // 全部段落成功，拼回整章并一次性写为译文
+    const finalText = stitchSegments(plan.segments);
     await patchDrafts([
       {
         index: draft.index,
         patch: {
-          content: parsed.text,
+          content: finalText,
           sourceContent: source,
           sourceLanguage: detectLanguage(source),
           translateStatus: 'done',
           translateError: '',
+          translationPlan: plan,
         },
       },
     ]);
-    previousTailRef.current = translatedTail(parsed.text);
+    previousTailRef.current = translatedTail(finalText);
 
     /**
-     * 译名写回**作品级**译名表，不是写回导入任务。
+     * 整章完成后才把本章定下的译名写回**作品级**译名表。
      *
-     * 任务跑完就会被删掉，译名存在那里等于下一批外文素材从零开始，
-     * 同一个人名会换个译法。合并规则（先到先得）在仓储里执行。
-     * 合并失败不算这一章失败：译文已经落盘了。
+     * 半章不落库：失败或中途放弃时，被放弃段落的译名不该污染作品级译名表。
+     * 段间一致性在翻译过程中由累计表（存在 plan 里）保证，落库规则同样是先到先得。
      */
-    if (parsed.glossary.length > 0) {
+    const chapterGlossary = accumulatedGlossary(plan.segments, []);
+    if (chapterGlossary.length > 0) {
       try {
-        const saved = await repository.mergeGlossaryTerms(novel.id, parsed.glossary);
+        const saved = await repository.mergeGlossaryTerms(novel.id, chapterGlossary);
         glossaryRef.current = saved.terms;
         if (aliveRef.current) setGlossary(saved.terms);
         invalidate();
@@ -877,7 +986,7 @@ export function ImportScreen({ novel, categories, onClose }: ImportScreenProps) 
             stopRef.current = true;
             if (await resumeAfterRejection(cause)) {
               setError({
-                message: `第 ${next.index} 章的译文没存上：${cause.message}。${STORAGE_HINT}`,
+                message: `第 ${next.index} 章的翻译没存上：${cause.message}。${STORAGE_HINT}`,
               });
             }
             break;
@@ -1819,9 +1928,9 @@ export function ImportScreen({ novel, categories, onClose }: ImportScreenProps) 
                     </p>
                     {needsTranslationToChinese(draft.content) &&
                     draft.content.length > TRANSLATE_SOFT_LIMIT ? (
-                      // 这是用户唯一能改切分的地方；翻译之后再提示就晚了
+                      // 长章不再有截断风险（翻译时自动分段），提示只是帮作者拿捏章节节奏
                       <p role="note" className="mt-1 text-xs leading-relaxed text-accent">
-                        这一章较长，单次翻译可能被截断，建议换一种分章方式或用自定义正则切小
+                        这一章较长，翻译时会自动分段进行；如果想按剧情节奏切小，也可以在这里调整
                       </p>
                     ) : null}
                     <div className="mt-2 flex gap-2">

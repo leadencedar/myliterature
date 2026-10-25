@@ -302,7 +302,12 @@ export interface NovelRepository {
       patch: Partial<
         Pick<
           ImportDraft,
-          'content' | 'sourceContent' | 'sourceLanguage' | 'translateStatus' | 'translateError'
+          | 'content'
+          | 'sourceContent'
+          | 'sourceLanguage'
+          | 'translateStatus'
+          | 'translateError'
+          | 'translationPlan'
         >
       >;
     }[],

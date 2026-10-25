@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { ChapterSchema, NovelSchema, StyleProfileSchema } from '@/domain/schema';
 import {
   GLOSSARY_DELIMITER,
+  accumulatedGlossary,
   buildTranslateSystemPrompt,
   buildTranslateUserPrompt,
   isTranslated,
   parseTranslation,
+  splitForTranslation,
   translatedTail,
+  translationLengthSane,
 } from './translate';
 
 const NOVEL = NovelSchema.parse({
@@ -172,5 +175,146 @@ describe('辅助判断', () => {
     expect(isTranslated(ChapterSchema.parse({ ...base, sourceContent: 'He left.' }))).toBe(true);
     // 只有空白不算
     expect(isTranslated(ChapterSchema.parse({ ...base, sourceContent: '   ' }))).toBe(false);
+  });
+});
+
+describe('章内自动分段', () => {
+  it('短章节一段搞定，原文原样保留', () => {
+    const source = 'Ashford shouldered the pack before dawn.';
+    expect(splitForTranslation(source)).toEqual([{ text: source, separatorBefore: '' }]);
+  });
+
+  it('段落之间在空行边界切，段内结构保留', () => {
+    const para = (n: number) => `Paragraph ${n}. ${'word '.repeat(400)}`; // 每段约 2400 字符，两段放不进一段
+    const source = `${para(1)}\n\n${para(2)}`;
+    const segments = splitForTranslation(source);
+    expect(segments).toHaveLength(2);
+    expect(segments[0]!.text).toBe(para(1));
+    expect(segments[1]!.separatorBefore).toBe('\n\n');
+    expect(segments[1]!.text).toBe(para(2));
+  });
+
+  it('拼接时把分隔放回原位，逐字还原原文布局', () => {
+    const source = ['AAA', '', 'BBB', '', '', 'CCC'].join('\n');
+    const segments = splitForTranslation(source);
+    const rebuilt = segments
+      .reduce((out, item) => out + item.separatorBefore + item.text, '')
+      .trim();
+    expect(rebuilt).toBe(source.trim());
+  });
+
+  it('超长段落按句末标点切，句界不会切在 grapheme 中间', () => {
+    const sentence = '他站在渡口，看着雨落进灰沼。';
+    const source = sentence.repeat(300); // 每句 15 字符，300 句远超预算
+    const segments = splitForTranslation(source, 400);
+    expect(segments.length).toBeGreaterThan(1);
+    for (const segment of segments) {
+      expect(segment.text.length).toBeLessThanOrEqual(400);
+      // 每段要么以句末标点收尾，要么是原文的尾段
+      expect(segment.text.trimEnd().endsWith('。')).toBe(true);
+    }
+    // 拼接逐字还原
+    const rebuilt = segments
+      .reduce((out, item) => out + item.separatorBefore + item.text, '')
+      .trim();
+    expect(rebuilt).toBe(source.trim());
+  });
+
+  it('围栏代码块是原子：超预算也不拆，且不丢失', () => {
+    const fence = ['```js', 'const x = 1;', '```'].join('\n');
+    const source = `前面一段。\n\n${fence}\n\n后面一段。`;
+    const segments = splitForTranslation(source, 25);
+    const fenceSegment = segments.find((item) => item.text.includes('```'));
+    expect(fenceSegment?.text).toBe(fence);
+    expect(fenceSegment?.separatorBefore).toBe('\n\n');
+    const rebuilt = segments
+      .reduce((out, item) => out + item.separatorBefore + item.text, '')
+      .trim();
+    expect(rebuilt).toBe(source.trim());
+  });
+
+  it('表格是原子：连续竖线行整块拿走', () => {
+    const table = ['| 名称 | 说明 |', '| --- | --- |', '| 灰沼 | 渡口 |'].join('\n');
+    const source = `上文。\n\n${table}\n\n下文。`;
+    const segments = splitForTranslation(source, 30);
+    const tableSegment = segments.find((item) => item.text.includes('|'));
+    expect(tableSegment?.text).toBe(table);
+  });
+
+  it('emoji 序列的硬切落在 grapheme 边界，不产生乱码', () => {
+    const source = '👍🏽'.repeat(300); // 每个序列是 2 个码点、1 个 grapheme
+    const segments = splitForTranslation(source, 100);
+    for (const segment of segments) {
+      expect(segment.text.length).toBeLessThanOrEqual(100);
+    }
+    const rebuilt = segments
+      .reduce((out, item) => out + item.separatorBefore + item.text, '')
+      .trim();
+    expect(rebuilt).toBe(source.trim());
+  });
+});
+
+describe('长度校验', () => {
+  it('正常比例通过', () => {
+    expect(
+      translationLengthSane(
+        '阿什福德在黎明前背起了行囊，把渔村留在了身后。',
+        'Ashford shouldered the pack before dawn and left the village.',
+      ),
+    ).toBe(true);
+  });
+
+  it('明显漏译（比例过低）拦下', () => {
+    expect(
+      translationLengthSane(
+        '阿什福德。',
+        'Ashford shouldered the pack before dawn and left the village behind.',
+      ),
+    ).toBe(false);
+  });
+
+  it('复述指令或明显异常（比例过高）拦下', () => {
+    expect(translationLengthSane(`${'好。'.repeat(400)}`, 'Ashford left.')).toBe(false);
+  });
+
+  it('空译文不算通过', () => {
+    expect(translationLengthSane('', 'Ashford left.')).toBe(false);
+  });
+});
+
+describe('分段累计译名', () => {
+  const done = (glossary: { source: string; target: string }[]) => ({
+    status: 'done' as const,
+    glossary,
+  });
+
+  it('先到先得：前段定下的译名，后段改不动', () => {
+    const accumulated = accumulatedGlossary(
+      [
+        done([{ source: 'Ashford', target: '阿什福德' }]),
+        done([{ source: 'Ashford', target: '艾许佛' }]),
+      ],
+      [],
+    );
+    expect(accumulated).toEqual([{ source: 'Ashford', target: '阿什福德' }]);
+  });
+
+  it('作品级译名表排在最前，段产出只能补充新名字', () => {
+    const accumulated = accumulatedGlossary(
+      [done([{ source: 'Ashford', target: '艾许佛' }])],
+      [{ source: 'Ashford', target: '阿什福德' }],
+    );
+    expect(accumulated).toEqual([{ source: 'Ashford', target: '阿什福德' }]);
+  });
+
+  it('未完成（pending）段的译名不参与累计 —— 失败段的贡献天然回滚', () => {
+    const accumulated = accumulatedGlossary(
+      [
+        done([{ source: 'Ashford', target: '阿什福德' }]),
+        { status: 'pending' as const, glossary: [{ source: 'Greymoor', target: '灰沼' }] },
+      ],
+      [],
+    );
+    expect(accumulated).toEqual([{ source: 'Ashford', target: '阿什福德' }]);
   });
 });

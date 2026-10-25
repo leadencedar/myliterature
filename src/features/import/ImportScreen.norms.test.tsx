@@ -159,7 +159,11 @@ describe('外文稿翻译', () => {
   it('翻译请求不带规范，即便规范作用范围全开', async () => {
     await createFixtureNorm(harness.repository, novel.id);
     const spy = stubFetch(
-      ['阿什福德在黎明前背起了行囊。', GLOSSARY_DELIMITER, 'Ashford => 阿什福德'].join('\n'),
+      [
+        '阿什福德在黎明前背起了行囊。渔村的雾压得很低，他摸了摸胸前的玉，转身没有回头。',
+        GLOSSARY_DELIMITER,
+        'Ashford => 阿什福德',
+      ].join('\n'),
     );
     const user = await pasteAndSplit(FOREIGN);
 
