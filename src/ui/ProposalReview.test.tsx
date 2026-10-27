@@ -190,7 +190,8 @@ describe('提案预览 · 取舍与批量操作', () => {
     expect(screen.getByRole('button', { name: '全部采用（2）' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '忽略这条' }));
 
-    const acceptButton = screen.getByRole('button', { name: '全部采用（1）' });
+    // 只剩一条时不再显示含义不明的「（1）」
+    const acceptButton = screen.getByRole('button', { name: '全部采用' });
     await user.click(acceptButton);
 
     const items = onAcceptAll.mock.calls[0]![0];
@@ -206,7 +207,7 @@ describe('提案预览 · 取舍与批量操作', () => {
 
     await user.click(screen.getByRole('button', { name: '恢复' }));
     expect(screen.queryByText('已标记为忽略')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '全部采用（1）' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '全部采用' })).toBeInTheDocument();
   });
 
   it('全部忽略时把所有 id 交给回调', async () => {

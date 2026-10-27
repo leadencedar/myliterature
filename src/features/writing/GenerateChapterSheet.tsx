@@ -15,7 +15,7 @@ import { Button } from '@/ui/Button';
 import { SegmentedControl, Toggle } from '@/ui/Controls';
 import { TextAreaField } from '@/ui/Field';
 import { ConfirmDialog, Sheet } from '@/ui/Sheet';
-import { chapterMaxOutputTokens, resolveChapterTargetWords } from './chapterLength';
+import { chapterMaxOutputTokens, resolveChapterTargetWords, sceneRangeHint } from './chapterLength';
 import { buildChapterSystemPrompt, buildChapterUserPrompt } from './chapterDraft';
 import { NormInjectionPicker } from './NormInjectionPicker';
 
@@ -49,8 +49,17 @@ interface GenerateChapterSheetProps {
   /** 章节已有正文，用于决定「替换」还是「追加」 */
   existingContent: string;
   onClose: () => void;
-  /** 用户确认采用时回调，由调用方写入章节 */
-  onAccept: (text: string, mode: 'replace' | 'append') => void | Promise<void>;
+  /**
+   * 用户确认采用时回调，由调用方写入章节。
+   * 第三个参数只在「不完整稿」采用时出现：调用方据此在编辑器里留痕，
+   * 避免截断/中断的半章被当成定稿（文学顾问评审 P0）。完整采用时保持两参调用，
+   * 既有调用方不用关心。
+   */
+  onAccept: (
+    text: string,
+    mode: 'replace' | 'append',
+    meta?: { incomplete?: 'truncated' | 'aborted' },
+  ) => void | Promise<void>;
 }
 
 /**
@@ -231,7 +240,9 @@ export function GenerateChapterSheet({
   /** 真正写入章节；直接采用与「仍要采用不完整内容」两条路径复用 */
   async function commitAccept(mode: 'replace' | 'append') {
     if (phase.kind !== 'done') return;
-    await onAccept(phase.text, mode);
+    // 不完整的事实要跟着这次采用一起交给调用方，否则半章落地后没有任何痕迹
+    if (phase.incomplete) await onAccept(phase.text, mode, { incomplete: phase.incomplete });
+    else await onAccept(phase.text, mode);
     setPendingAccept(null);
     setPhase({ kind: 'form' });
     onClose();
@@ -294,7 +305,7 @@ export function GenerateChapterSheet({
                 目标字数：{targetWords} 字（来源：{targetWordsSource}）
               </p>
               <p className="text-xs leading-relaxed text-ink-500">
-                场景数参考按这个目标推算；要修改请到「写作 → 大纲节点」里改。
+                场景数参考：约 {sceneRangeHint(targetWords)}；要修改请到「写作 → 大纲节点」里改。
               </p>
             </div>
 
@@ -398,7 +409,10 @@ export function GenerateChapterSheet({
                     ? '生成未完成'
                     : '生成完成'}
               </p>
-              <p className="text-xs text-ink-500">{countWords(generatedText)} 字</p>
+              {/* 结果旁边直接给出「已生成 / 目标」对照：截断时作者才知道差了多少 */}
+              <p className="text-xs text-ink-500">
+                {countWords(generatedText)} 字 / 目标 {targetWords} 字
+              </p>
             </div>
 
             {/* 截断/中断必须在结果区顶部就说清楚：内容看得见，但它不是完整的一章 */}
@@ -460,7 +474,7 @@ export function GenerateChapterSheet({
       <ConfirmDialog
         open={pendingAccept !== null}
         title="仍要采用不完整内容？"
-        message="这次生成没有完整结束，采用后只会保存已生成的部分。建议回到生成结果继续补写，或重新生成。"
+        message="采用后本章仍是草稿，可能缺少结尾。建议在编辑器里从末尾继续补写，补完再标「已完成」。"
         confirmLabel="仍要采用"
         onConfirm={() => {
           if (pendingAccept) void commitAccept(pendingAccept);

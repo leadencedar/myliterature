@@ -5,8 +5,9 @@ import { useActiveNovel } from '@/app/store/useActiveNovel';
 import { toLocalDate } from '@/domain/primitives';
 import type { Category, Novel, OutlineNode } from '@/domain/schema';
 import { useLlmSettings } from '@/llm/settingsStore';
-import { sseResponse, textDeltaEvents } from '@/test/llmFixtures';
+import { completion, jsonResponse, sseResponse, textDeltaEvents } from '@/test/llmFixtures';
 import { createTestHarness, type TestHarness } from '@/test/renderWithProviders';
+import { useIncompleteDrafts } from './incompleteDrafts';
 import { WritingPage } from './WritingPage';
 
 let harness: TestHarness;
@@ -20,6 +21,8 @@ beforeEach(async () => {
   charCategory = (await harness.repository.listCategories(novel.id))[1]!;
   useActiveNovel.setState({ activeNovelId: novel.id });
   localStorage.clear();
+  // 「未完成稿留痕」是内存 store，用例之间不能串味
+  useIncompleteDrafts.setState({ chapterIds: {} });
   useLlmSettings.getState().applyPreset('deepseek');
   useLlmSettings.getState().update({ apiKey: 'sk-test' });
 
@@ -186,9 +189,12 @@ describe('编辑与自动保存', () => {
 });
 
 describe('整章生成', () => {
-  function stubStream(deltas: string[]) {
+  function stubStream(deltas: string[], finishReason?: string) {
+    const extra = finishReason
+      ? [`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: finishReason }] })}\n\n`]
+      : [];
     const fetchSpy = vi.fn((_url: RequestInfo | URL, _init?: RequestInit) =>
-      Promise.resolve(sseResponse(textDeltaEvents(deltas))),
+      Promise.resolve(sseResponse(textDeltaEvents(deltas, extra))),
     );
     vi.stubGlobal('fetch', fetchSpy);
     return fetchSpy;
@@ -405,6 +411,165 @@ describe('整章生成', () => {
 
     expect(screen.getByRole('button', { name: '开始生成' })).toBeDisabled();
     expect(screen.getByText(/需要先在「设置」里配置模型/u)).toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------- P0 截断稿留痕
+
+  const SUMMARY_RESULT = {
+    summary: '半章摘要。',
+    keyEvents: ['写到一半'],
+    appearingEntries: [],
+    newOpenThreads: [],
+    resolvedThreads: [],
+    rollingSummary: '写到一半。',
+  };
+
+  /**
+   * 按请求的 stream 字段分流：流式正文返回可截断的 SSE，非流式的摘要返回合法 JSON。
+   * 采用截断稿后切「已完成」会自动弹摘要抽屉，不 mock 它会让用例里出现无谓的报错。
+   */
+  function stubChapterLlm(options: { deltas: string[]; finishReason?: string }) {
+    const fetchSpy = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { stream?: boolean };
+      if (!body.stream) {
+        return Promise.resolve(jsonResponse(completion(JSON.stringify(SUMMARY_RESULT))));
+      }
+      const extra = options.finishReason
+        ? [
+            `data: ${JSON.stringify({
+              choices: [{ delta: {}, finish_reason: options.finishReason }],
+            })}\n\n`,
+          ]
+        : [];
+      return Promise.resolve(sseResponse(textDeltaEvents(options.deltas, extra)));
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    return fetchSpy;
+  }
+
+  const INCOMPLETE_HINT = /本章由未完成生成稿采用，可能缺少结尾/u;
+
+  /** 点采用；不完整稿会弹二次确认，顺手确认 */
+  async function adoptGenerated(user: ReturnType<typeof userEvent.setup>, label = '采用为正文') {
+    await user.click(screen.getByRole('button', { name: label }));
+    const confirm = screen.queryByRole('dialog', { name: '仍要采用不完整内容？' });
+    if (confirm) await user.click(within(confirm).getByRole('button', { name: '仍要采用' }));
+  }
+
+  /** 生成一次截断稿并采用，返回仍在编辑器里的 user */
+  async function adoptTruncated() {
+    stubChapterLlm({ deltas: ['只写了一半的正文。'], finishReason: 'length' });
+    const user = await enterEditor();
+    await user.click(screen.getByRole('button', { name: '生成本章' }));
+    await screen.findByText('本次注入');
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+    await screen.findByLabelText('生成结果（可直接修改）');
+    expect(screen.getByText('生成未完成')).toBeInTheDocument();
+    await adoptGenerated(user);
+    return user;
+  }
+
+  it('采用截断稿后编辑器标题栏下出现会话内提示，点「知道了」关闭', async () => {
+    const user = await adoptTruncated();
+
+    expect(await screen.findByText(INCOMPLETE_HINT)).toBeInTheDocument();
+    // 半章确实写入正文：提示不是拦写，而是留痕
+    await waitFor(async () => {
+      const chapters = await harness.repository.listChapters(novel.id);
+      expect(chapters[0]?.content).toBe('只写了一半的正文。');
+    });
+
+    await user.click(screen.getByRole('button', { name: '知道了' }));
+    expect(screen.queryByText(INCOMPLETE_HINT)).not.toBeInTheDocument();
+  });
+
+  it('切到「已完成」时清除未完成提示', async () => {
+    const user = await adoptTruncated();
+    expect(await screen.findByText(INCOMPLETE_HINT)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '草稿' }));
+
+    expect(screen.queryByText(INCOMPLETE_HINT)).not.toBeInTheDocument();
+    // 标记完成会顺带弹摘要抽屉，关掉再结束用例
+    const summary = screen.queryByRole('dialog', { name: '本章摘要' });
+    if (summary) await user.click(within(summary).getByRole('button', { name: '关闭' }));
+  });
+
+  it('完整采用不出现提示，并清掉之前留下的提示', async () => {
+    stubChapterLlm({ deltas: ['只写了一半的正文。'], finishReason: 'length' });
+    const user = await enterEditor();
+    await user.click(screen.getByRole('button', { name: '生成本章' }));
+    await screen.findByText('本次注入');
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+    await screen.findByLabelText('生成结果（可直接修改）');
+    await adoptGenerated(user);
+    expect(await screen.findByText(INCOMPLETE_HINT)).toBeInTheDocument();
+
+    // 第二次生成完整稿并替换正文 → 之前的提醒要清掉
+    stubChapterLlm({ deltas: ['这次写完整了。'] });
+    await user.click(screen.getByRole('button', { name: '生成本章' }));
+    await screen.findByText('本次注入');
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+    await screen.findByLabelText('生成结果（可直接修改）');
+    await adoptGenerated(user, '替换正文');
+
+    await waitFor(() => expect(screen.queryByText(INCOMPLETE_HINT)).not.toBeInTheDocument());
+  });
+
+  it('完整采用后不出现提示', async () => {
+    stubChapterLlm({ deltas: ['完整的一章正文。'] });
+    const user = await enterEditor();
+    await user.click(screen.getByRole('button', { name: '生成本章' }));
+    await screen.findByText('本次注入');
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+    await screen.findByLabelText('生成结果（可直接修改）');
+    await adoptGenerated(user);
+
+    await waitFor(async () => {
+      const chapters = await harness.repository.listChapters(novel.id);
+      expect(chapters[0]?.content).toBe('完整的一章正文。');
+    });
+    expect(screen.queryByText(INCOMPLETE_HINT)).not.toBeInTheDocument();
+  });
+
+  it('已完成的章节采用截断稿：状态退回草稿并落盘、提示保留、不自动触发摘要', async () => {
+    const existing = await harness.repository.createChapter(novel.id, {
+      title: '第1章 雪夜',
+      content: '已经写完的一章。',
+      outlineNodeId: chapterNode.id,
+      status: 'done',
+    });
+    stubChapterLlm({ deltas: ['只写了一半的正文。'], finishReason: 'length' });
+    const user = await enterEditor();
+    // 进编辑器时这一章确实是「已完成」
+    expect(screen.getByRole('button', { name: '已完成' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '生成本章' }));
+    await screen.findByText('本次注入');
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+    await screen.findByLabelText('生成结果（可直接修改）');
+    await adoptGenerated(user, '替换正文');
+
+    // 与二次确认文案「采用后本章仍是草稿」一致，也避免「已完成但只有半章」
+    expect(await screen.findByText(INCOMPLETE_HINT)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '草稿' })).toBeInTheDocument();
+    await waitFor(async () => {
+      const chapters = await harness.repository.listChapters(novel.id);
+      expect(chapters.find((item) => item.id === existing.id)?.status).toBe('draft');
+    });
+    // 摘要只在作者重新标完成时生成，退回草稿这一步不该弹摘要抽屉
+    expect(screen.queryByRole('dialog', { name: '本章摘要' })).not.toBeInTheDocument();
+  });
+
+  it('草稿章节采用截断稿：状态保持草稿', async () => {
+    await adoptTruncated();
+
+    expect(await screen.findByText(INCOMPLETE_HINT)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '草稿' })).toBeInTheDocument();
+    await waitFor(async () => {
+      const chapters = await harness.repository.listChapters(novel.id);
+      expect(chapters[0]?.status).toBe('draft');
+    });
   });
 });
 

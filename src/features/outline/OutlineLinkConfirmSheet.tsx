@@ -59,23 +59,18 @@ export function OutlineLinkConfirmSheet({
     });
   }
 
-  function selectedByChild(onlySelected: boolean) {
+  function selectedByChild() {
     return suggestions.map(({ child, suggestions: links }) => ({
       childId: child.id,
       entryIds: links
-        .filter((link) => !onlySelected || !deselected.has(`${child.id}:${link.entry.id}`))
+        .filter((link) => !deselected.has(`${child.id}:${link.entry.id}`))
         .map((link) => link.entry.id),
     }));
   }
 
-  /** 全部保留：直接写全部建议（不留下「点了保留还要再点确认」的两步） */
-  function keepAll() {
-    return onConfirm({ selectedByChild: selectedByChild(false), suppressed: [] });
-  }
-
   function confirmSelected() {
     const pairs = allPairs.filter((pair) => deselected.has(pairKey(pair)));
-    return onConfirm({ selectedByChild: selectedByChild(true), suppressed: pairs });
+    return onConfirm({ selectedByChild: selectedByChild(), suppressed: pairs });
   }
 
   function skipAll() {
@@ -86,19 +81,10 @@ export function OutlineLinkConfirmSheet({
     <Sheet
       open={open}
       title="确认自动关联"
-      description="只写入你勾选的条目；不勾 = 不关联。父节点原有手工关联只对新子节点继承，不改父节点。"
+      description="只写入你勾选的条目；不勾 = 不关联。关闭面板不会写入任何关联；取消的条目在本次打开节点抽屉期间不再建议。父节点原有手工关联只对新子节点继承，不改父节点。"
       onClose={onClose}
       footer={
         <>
-          <Button
-            variant="secondary"
-            size="lg"
-            block
-            disabled={busy || allPairs.length === 0}
-            onClick={() => void keepAll()}
-          >
-            全部保留
-          </Button>
           <Button
             variant="ghost"
             size="lg"
@@ -121,7 +107,7 @@ export function OutlineLinkConfirmSheet({
       }
     >
       <p className="text-xs leading-relaxed text-ink-500">
-        标「继承」的是父节点的手工关联；标「提到」的是子节点标题/梗概里出现的名字。
+        标「继承」的是父节点的手工关联；标「名字提到」的是子节点标题/梗概里出现的名字。
       </p>
       <ul className="flex flex-col gap-3">
         {suggestions.map(({ child, suggestions: links }) => (
@@ -131,10 +117,13 @@ export function OutlineLinkConfirmSheet({
               {links.map((link) => {
                 const key = `${child.id}:${link.entry.id}`;
                 const active = !deselected.has(key);
+                // 命中名与条目标题相同时不再重复写一遍（评审：「沈砚 提到 · 沈砚」）
                 const sourceLabel =
                   link.reason === 'inherited'
                     ? '继承'
-                    : `提到 · ${link.matchedName ?? link.entry.title}`;
+                    : link.matchedName && link.matchedName !== link.entry.title
+                      ? `名字提到 · ${link.matchedName}`
+                      : '名字提到';
                 return (
                   <button
                     key={key}

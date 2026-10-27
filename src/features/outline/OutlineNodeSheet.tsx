@@ -42,7 +42,8 @@ const STATUS_OPTIONS = (Object.keys(OUTLINE_STATUS_LABELS) as OutlineNode['statu
 type ExpandState =
   | { phase: 'idle' }
   | { phase: 'running' }
-  | { phase: 'review'; batchId: string }
+  /** childCount：本批细目数，review 区给作者一个「共 N 章」的量感 */
+  | { phase: 'review'; batchId: string; childCount: number }
   | { phase: 'error'; message: string };
 
 /** 某节点及其全部后代的 id（含自身）；replace 细化会删除这些节点 */
@@ -67,8 +68,12 @@ function subtreeIdsOf(nodes: OutlineNode[], rootId: string): Set<string> {
 /** 注入清单里一条目的来源标签 */
 function planningSourceLabel(block: PlanningEntryBlock): string {
   if (block.reason === 'core') return '核心';
-  if (block.reason === 'linked') return '关联';
-  return `提到 · ${block.matchedName ?? block.entry.title}`;
+  if (block.reason === 'linked') return '手工关联';
+  // 命中名与标题相同时不重复写（评审：「沈砚 提到 · 沈砚」）
+  if (block.matchedName && block.matchedName !== block.entry.title) {
+    return `名字提到 · ${block.matchedName}`;
+  }
+  return '名字提到';
 }
 
 export function OutlineNodeSheet({
@@ -331,7 +336,7 @@ export function OutlineNodeSheet({
       await repository.createProposals([proposal]);
       pendingExpandRef.current = { batchId, parentId: saved.id };
       invalidate();
-      setExpand({ phase: 'review', batchId });
+      setExpand({ phase: 'review', batchId, childCount: result.data.children.length });
     } catch (cause) {
       setExpand({
         phase: 'error',
@@ -578,7 +583,7 @@ export function OutlineNodeSheet({
               {/* 注入清单：细化前让作者看到「这次会带上哪些设定」，mentioned 可临时移除（不写库） */}
               {hasInjectionInfo ? (
                 <div className="flex flex-col gap-1.5 rounded-lg bg-paper-sunken px-3 py-2">
-                  <p className="text-xs font-medium text-ink-700">本次参考设定</p>
+                  <p className="text-xs font-medium text-ink-700">本次注入</p>
                   {selection.core.length > 0 ? (
                     <p className="text-xs leading-relaxed text-ink-500">
                       核心设定 {selection.core.length} 条（始终注入）：
@@ -588,7 +593,7 @@ export function OutlineNodeSheet({
                   {selection.related.length > 0 ? (
                     <>
                       <p className="text-xs leading-relaxed text-ink-500">
-                        {`相关设定：显式 ${linkedCount} 条 + 提到 ${mentionedCount} 条，共${formatTokens(
+                        {`相关设定：手工关联 ${linkedCount} 条 + 名字提到 ${mentionedCount} 条，共${formatTokens(
                           relatedTokens,
                         )}`}
                       </p>
@@ -601,11 +606,12 @@ export function OutlineNodeSheet({
                             {block.entry.title}
                             <span className="text-ink-300">{planningSourceLabel(block)}</span>
                             {block.reason === 'mentioned' ? (
+                              // 评审：× 又小又淡，390 宽下难瞄准。给足 28px 触控区并加深颜色
                               <button
                                 type="button"
-                                aria-label={`移除提到的设定：${block.entry.title}`}
+                                aria-label={`移除名字提到的设定：${block.entry.title}`}
                                 onClick={() => removeMention(block.entry.id)}
-                                className="text-ink-300"
+                                className="-mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm text-ink-500 hover:bg-ink-100 hover:text-ink-900"
                               >
                                 ×
                               </button>
@@ -622,7 +628,7 @@ export function OutlineNodeSheet({
                         .map(
                           (block) =>
                             `${block.entry.title}（${
-                              block.reason === 'linked' ? '显式关联超出篇幅' : '超出篇幅'
+                              block.reason === 'linked' ? '手工关联超出篇幅' : '超出篇幅'
                             }）`,
                         )
                         .join('、')}
@@ -666,12 +672,17 @@ export function OutlineNodeSheet({
           ) : null}
 
           {expand.phase === 'review' ? (
-            <ProposalInbox
-              novelId={novel.id}
-              batchId={expand.batchId}
-              acceptAllLabel="采用这份细目"
-              onSettled={() => void handleExpandSettled()}
-            />
+            <>
+              <p className="text-xs leading-relaxed text-ink-500">
+                共 {expand.childCount} 章细目，采用后可继续编辑。
+              </p>
+              <ProposalInbox
+                novelId={novel.id}
+                batchId={expand.batchId}
+                acceptAllLabel="采用这份细目"
+                onSettled={() => void handleExpandSettled()}
+              />
+            </>
           ) : null}
         </div>
 

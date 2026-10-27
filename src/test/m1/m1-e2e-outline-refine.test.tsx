@@ -228,10 +228,11 @@ describe('S4 · 注入清单与临时移除（US-1a，反向 R26）', () => {
     const bodies = stubExpand();
     const { user } = renderSheet(node, { entries: [qi, pei, shen] });
 
-    expect(screen.getByText('本次参考设定')).toBeInTheDocument();
+    expect(screen.getByText('本次注入')).toBeInTheDocument();
     expect(screen.getByText(/核心设定 1 条（始终注入）：灵气/u)).toBeInTheDocument();
-    expect(screen.getByText(/相关设定：显式 1 条 \+ 提到 1 条/u)).toBeInTheDocument();
-    expect(screen.getByText(/提到 · 沈砚/u)).toBeInTheDocument();
+    expect(screen.getByText(/相关设定：手工关联 1 条 \+ 名字提到 1 条/u)).toBeInTheDocument();
+    // P1：命中名与标题相同时不再重复写一遍（旧「沈砚 提到 · 沈砚」）
+    expect(screen.getAllByText('名字提到').length).toBeGreaterThan(0);
 
     // 系统提示：核心设定进 system，逐节点条目进 user（缓存纪律）
     await startExpand(user);
@@ -244,7 +245,7 @@ describe('S4 · 注入清单与临时移除（US-1a，反向 R26）', () => {
     expect(userPrompt).toContain('身份：沈砚的身份');
   });
 
-  it('移除提到的设定：chips 消失，本次请求 prompt 不含该条目完整字段', async () => {
+  it('移除名字提到的设定：chips 消失，本次请求 prompt 不含该条目完整字段', async () => {
     const shen = await entry('沈砚');
     const node = await harness.repository.createOutlineNode(novel.id, {
       title: '第一卷 渡口',
@@ -253,8 +254,11 @@ describe('S4 · 注入清单与临时移除（US-1a，反向 R26）', () => {
     const bodies = stubExpand();
     const { user } = renderSheet(node, { entries: [shen] });
 
-    await user.click(screen.getByRole('button', { name: '移除提到的设定：沈砚' }));
-    expect(screen.queryByText(/提到 · 沈砚/u)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '移除名字提到的设定：沈砚' }));
+    expect(
+      screen.queryByRole('button', { name: '移除名字提到的设定：沈砚' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('本次注入')).not.toBeInTheDocument();
 
     await startExpand(user);
     const prompt = userPromptOf(bodies[0]!);
@@ -372,7 +376,18 @@ describe('S5 · 采用后关联确认（US-2，反向 R15–R21）', () => {
     const { user } = renderSheet(node, { entries: [pei, shen] });
 
     await startExpand(user);
+    // P1：review 区给出本批细目数；单提案采用按钮不带含义不明的「（1）」
+    expect(screen.getByText('共 2 章细目，采用后可继续编辑。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '采用这份细目' })).toBeInTheDocument();
+
     const dialog = await adoptAndWaitPanel(user);
+
+    // P1：去掉与确认重复的「全部保留」；补「关闭不写入 / 取消项不再建议」说明
+    expect(within(dialog).queryByRole('button', { name: '全部保留' })).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/关闭面板不会写入任何关联/u)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/取消的条目在本次打开节点抽屉期间不再建议/u),
+    ).toBeInTheDocument();
 
     // 默认全选：4 条建议（每子节点各继承裴照 + 提到沈砚）
     expect(within(dialog).getByRole('button', { name: '确认关联（4 条）' })).toBeInTheDocument();
@@ -546,7 +561,7 @@ describe('S5 · 采用后关联确认（US-2，反向 R15–R21）', () => {
     const updateSpy = vi.spyOn(harness.repository, 'updateOutlineLinks');
     const { user } = renderSheet(node, { entries: [] });
 
-    expect(screen.queryByText('本次参考设定')).not.toBeInTheDocument();
+    expect(screen.queryByText('本次注入')).not.toBeInTheDocument();
     await startExpand(user);
     await user.click(screen.getByRole('button', { name: /采用这份细目/u }));
     await settleAsync();
@@ -583,5 +598,55 @@ describe('反向 R17 · 连点细化只发一次请求', () => {
     release?.();
     await screen.findByRole('button', { name: /采用这份细目/u });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('P1 · 关联确认面板（关闭不写入 / chip 文案不重复）', () => {
+  it('关闭面板（X）：一条关联都不写，与「全部跳过」等价', async () => {
+    const shen = await entry('沈砚');
+    const node = await harness.repository.createOutlineNode(novel.id, {
+      title: '第一卷 渡口',
+      synopsis: '沈砚在渡口等人。',
+    });
+    stubExpand();
+    const updateSpy = vi.spyOn(harness.repository, 'updateOutlineLinks');
+    const { user } = renderSheet(node, { entries: [shen] });
+
+    await startExpand(user);
+    const dialog = await adoptAndWaitPanel(user);
+    expect(within(dialog).getByText(/关闭面板不会写入任何关联/u)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: '关闭' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '确认自动关联' })).not.toBeInTheDocument(),
+    );
+
+    expect(updateSpy).not.toHaveBeenCalled();
+    const children = (await outlineOf()).filter((item) => item.parentId === node.id);
+    expect(children).toHaveLength(2);
+    expect(children.every((child) => child.linkedEntryIds.length === 0)).toBe(true);
+  });
+
+  it('别名命中：chip 显示「名字提到 · 小舟」，标题不重复一遍', async () => {
+    const shen = await entry('沈砚', { aliases: ['小舟'] });
+    const node = await harness.repository.createOutlineNode(novel.id, {
+      title: '第一卷 渡口',
+      synopsis: '卷梗概。',
+    });
+    stubExpand({
+      children: [
+        { title: '渡口', synopsis: '小舟在渡口等人。', targetWords: 1500 },
+        { title: '北上', synopsis: '继续赶路。', targetWords: 1500 },
+      ],
+    });
+    const { user } = renderSheet(node, { entries: [shen] });
+
+    await startExpand(user);
+    const dialog = await adoptAndWaitPanel(user);
+    // 命中名与标题不同 → 显示命中名；不再是「沈砚 提到 · 小舟」
+    expect(
+      within(dialog).getByRole('button', { name: /关联建议：渡口 · 沈砚（名字提到 · 小舟）/u }),
+    ).toBeInTheDocument();
+    // 没有同名重复的旧文案
+    expect(within(dialog).queryByText(/提到 · 沈砚/u)).not.toBeInTheDocument();
   });
 });

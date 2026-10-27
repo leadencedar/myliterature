@@ -109,6 +109,28 @@ describe('目标字数来源（US-4 / US-5）', () => {
     });
     expect(screen.getByText('目标字数：3000 字（来源：默认 3000）')).toBeInTheDocument();
   });
+
+  it('场景数参考给出具体区间，而不是一句「按目标推算」', () => {
+    renderSheet();
+    // 6000 字 → 3–5 场（sceneRangeHint）；评审：没有数字等于没兑现结构承诺
+    expect(
+      screen.getByText('场景数参考：约 3–5 场；要修改请到「写作 → 大纲节点」里改。'),
+    ).toBeInTheDocument();
+  });
+
+  it('默认目标 3000 字时给出 1–2 场参考', async () => {
+    const defaultNode = await harness.repository.createOutlineNode(context.novel.id, {
+      title: '第2章 旧识',
+      parentId: volume.id,
+    });
+    renderSheet({
+      outline: [...context.outline, defaultNode],
+      targetNodeId: defaultNode.id,
+    });
+    expect(
+      screen.getByText('场景数参考：约 1–2 场；要修改请到「写作 → 大纲节点」里改。'),
+    ).toBeInTheDocument();
+  });
 });
 
 describe('请求参数与结构文案', () => {
@@ -140,6 +162,7 @@ describe('截断与中断防线（US-4）', () => {
 
     expect(screen.getByText('生成未完成')).toBeInTheDocument();
     expect(screen.getByText(/生成被截断，内容不完整/u)).toBeInTheDocument();
+    expect(screen.getByText('8 字 / 目标 6000 字')).toBeInTheDocument();
     expect(screen.queryByText('生成完成')).not.toBeInTheDocument();
   });
 
@@ -149,6 +172,7 @@ describe('截断与中断防线（US-4）', () => {
     await generate(user);
 
     expect(screen.getByText('生成完成')).toBeInTheDocument();
+    expect(screen.getByText('4 字 / 目标 6000 字')).toBeInTheDocument();
     expect(screen.queryByText(/生成被截断/u)).not.toBeInTheDocument();
 
     // 正常完成直接采用，不弹二次确认
@@ -164,7 +188,10 @@ describe('截断与中断防线（US-4）', () => {
 
     await user.click(screen.getByRole('button', { name: '采用为正文' }));
     expect(onAccept).not.toHaveBeenCalled();
-    expect(screen.getByRole('dialog', { name: '仍要采用不完整内容？' })).toBeInTheDocument();
+    const confirm = screen.getByRole('dialog', { name: '仍要采用不完整内容？' });
+    expect(confirm).toHaveTextContent(
+      '采用后本章仍是草稿，可能缺少结尾。建议在编辑器里从末尾继续补写，补完再标「已完成」。',
+    );
 
     // 先取消：什么都不写，结果还在
     await user.click(screen.getByRole('button', { name: '取消' }));
@@ -174,7 +201,11 @@ describe('截断与中断防线（US-4）', () => {
     // 再确认：按原模式写入
     await user.click(screen.getByRole('button', { name: '采用为正文' }));
     await user.click(screen.getByRole('button', { name: '仍要采用' }));
-    await waitFor(() => expect(onAccept).toHaveBeenCalledWith('只写了一半的正文', 'replace'));
+    await waitFor(() =>
+      expect(onAccept).toHaveBeenCalledWith('只写了一半的正文', 'replace', {
+        incomplete: 'truncated',
+      }),
+    );
   });
 
   it('用户中止时保留已生成内容并标记未完成，采用同样要二次确认', async () => {
@@ -211,7 +242,9 @@ describe('截断与中断防线（US-4）', () => {
     await user.click(screen.getByRole('button', { name: '采用为正文' }));
     const dialog = await screen.findByRole('dialog', { name: '仍要采用不完整内容？' });
     await user.click(within(dialog).getByRole('button', { name: '仍要采用' }));
-    await waitFor(() => expect(onAccept).toHaveBeenCalledWith('写到一半', 'replace'));
+    await waitFor(() =>
+      expect(onAccept).toHaveBeenCalledWith('写到一半', 'replace', { incomplete: 'aborted' }),
+    );
   });
 });
 

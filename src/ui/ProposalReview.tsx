@@ -274,7 +274,12 @@ export function ProposalReview({
           disabled={busy || selected.length === 0}
           onClick={() => onAcceptAll(selected.map(materialize))}
         >
-          {busy ? '处理中…' : `${acceptAllLabel}（${selected.length}）`}
+          {/* 只有一条时「（1）」没有信息量，还会让作者以为漏选了什么 */}
+          {busy
+            ? '处理中…'
+            : selected.length > 1
+              ? `${acceptAllLabel}（${selected.length}）`
+              : acceptAllLabel}
         </Button>
       </div>
     </div>

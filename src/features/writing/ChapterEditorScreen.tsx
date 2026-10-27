@@ -16,6 +16,7 @@ import { useScenarioChapterContext } from '../scenario/useScenarioChapterContext
 import { ChapterSummarySheet } from './ChapterSummarySheet';
 import { TranslateSheet } from './TranslateSheet';
 import { GenerateChapterSheet } from './GenerateChapterSheet';
+import { useIncompleteDraft, useIncompleteDrafts } from './incompleteDrafts';
 import { NormCheckSheet, type NormCheckSession } from './NormCheckSheet';
 import { displayNormTitle, locateQuote, type ResolvedCheckIssue } from './normCheck';
 import { ReviseSheet } from './ReviseSheet';
@@ -73,6 +74,11 @@ export function ChapterEditorScreen({
   const invalidate = useInvalidate();
   // 只用来判断「按规范检查」入口是否可用；真正的检查请求在面板里发
   const llm = useLlm();
+
+  // 采用了截断/中断稿的会话内留痕（P0）：只放内存，切「已完成」或完整采用时清除
+  const incompleteDraft = useIncompleteDraft(chapter.id);
+  const markIncomplete = useIncompleteDrafts((state) => state.markIncomplete);
+  const clearIncomplete = useIncompleteDrafts((state) => state.clearIncomplete);
 
   // 初值只在挂载时取。调用方用 key={chapter.id} 保证换章节时重新挂载
   const [title, setTitle] = useState(chapter.title);
@@ -220,13 +226,17 @@ export function ChapterEditorScreen({
     onClose();
   }
 
-  /** 写入正文并立即落盘；同时把改动前的内容压入撤销栈 */
-  async function commitContent(next: string) {
+  /**
+   * 写入正文并立即落盘；同时把改动前的内容压入撤销栈。
+   * patch 用来把同一次确认动作里的其它字段（如状态退回草稿）并进同一次写库，
+   * 不留「正文已替换、状态还是已完成」的中间态。
+   */
+  async function commitContent(next: string, patch: Partial<Chapter> = {}) {
     historyRef.current.push(content);
     setCanUndo(true);
     setContent(next);
     // 用户明确确认过的动作，不等防抖
-    pendingRef.current = { ...pendingRef.current, content: next };
+    pendingRef.current = { ...pendingRef.current, content: next, ...patch };
     if (timerRef.current) clearTimeout(timerRef.current);
     await flush.current();
   }
@@ -253,9 +263,21 @@ export function ChapterEditorScreen({
     setTranslateOpen(false);
   }
 
-  async function applyGenerated(text: string, mode: 'replace' | 'append') {
+  async function applyGenerated(
+    text: string,
+    mode: 'replace' | 'append',
+    meta?: { incomplete?: 'truncated' | 'aborted' },
+  ) {
     const next = mode === 'append' ? `${content.trimEnd()}\n\n${text.trim()}` : text.trim();
-    await commitContent(next);
+    // 与确认文案「采用后本章仍是草稿」一致：已完成章节不能留半章当定稿。
+    // 状态与正文放进同一次写库；摘要等作者重新标完成时再生成，这里不自动触发
+    const demoteToDraft = Boolean(meta?.incomplete) && status === 'done';
+    await commitContent(next, demoteToDraft ? { status: 'draft' } : {});
+    if (demoteToDraft) setStatus('draft');
+    // 不完整稿的采用事实跟着这次写入走：留在标题栏下方，提醒作者补完再标完成。
+    // 完整采用则清掉之前的提醒（作者可能已经补写或重新生成了完整稿）
+    if (meta?.incomplete) markIncomplete(chapter.id);
+    else clearIncomplete(chapter.id);
   }
 
   async function applyRevised(replacement: string, action: ReviseAction) {
@@ -493,6 +515,8 @@ export function ChapterEditorScreen({
               const next = status === 'done' ? 'draft' : 'done';
               setStatus(next);
               scheduleSave({ status: next });
+              // 标完成代表作者认可这是定稿：未完成稿的提醒到此为止
+              if (next === 'done') clearIncomplete(chapter.id);
               // 标记完成即触发摘要生成：靠用户记得手动补，摘要链很快就会断
               if (next === 'done' && content.trim()) {
                 setSummaryAutoStart(true);
@@ -507,6 +531,23 @@ export function ChapterEditorScreen({
             {status === 'done' ? '已完成' : '草稿'}
           </button>
         </div>
+        {/* P0：截断/中断稿采用后必须在编辑器里留痕，否则半章会被当成定稿 */}
+        {incompleteDraft ? (
+          <div role="status" className="reading-column px-3 pb-2 lg:px-1">
+            <div className="flex items-start gap-2 rounded-lg bg-accent-soft px-3 py-2">
+              <p className="flex-1 text-xs leading-relaxed text-accent">
+                本章由未完成生成稿采用，可能缺少结尾；补写后再标「已完成」
+              </p>
+              <button
+                type="button"
+                onClick={() => clearIncomplete(chapter.id)}
+                className="shrink-0 rounded-full bg-paper-raised px-2.5 py-1 text-[0.6875rem] font-medium text-ink-700"
+              >
+                知道了
+              </button>
+            </div>
+          </div>
+        ) : null}
         {checkReason ? (
           <p role="status" className="reading-column px-3 pb-2 text-xs text-accent lg:px-1">
             {checkReason}

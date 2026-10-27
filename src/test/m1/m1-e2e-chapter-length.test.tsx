@@ -149,9 +149,12 @@ async function startGeneration(user: ReturnType<typeof userEvent.setup>) {
 // ---------------------------------------------------------------- 用例
 
 describe('指标 5 · 目标字数与来源 100% 可见（US-4a / US-5a）', () => {
-  it('大纲节点有目标：显示 6000 字 + 来源「大纲节点」', () => {
+  it('大纲节点有目标：显示 6000 字 + 来源「大纲节点」+ 具体场景区间（P1）', () => {
     renderSheet();
     expect(screen.getByText('目标字数：6000 字（来源：大纲节点）')).toBeInTheDocument();
+    expect(
+      screen.getByText('场景数参考：约 3–5 场；要修改请到「写作 → 大纲节点」里改。'),
+    ).toBeInTheDocument();
   });
 
   it('大纲节点为空：显示 3000 字 + 来源「默认 3000」，并提示去大纲修改', async () => {
@@ -161,7 +164,9 @@ describe('指标 5 · 目标字数与来源 100% 可见（US-4a / US-5a）', () 
     });
     renderSheet({ outline: [...context.outline, defaultNode], targetNodeId: defaultNode.id });
     expect(screen.getByText('目标字数：3000 字（来源：默认 3000）')).toBeInTheDocument();
-    expect(screen.getByText(/要修改请到「写作 → 大纲节点」里改/u)).toBeInTheDocument();
+    expect(
+      screen.getByText('场景数参考：约 1–2 场；要修改请到「写作 → 大纲节点」里改。'),
+    ).toBeInTheDocument();
   });
 });
 
@@ -210,9 +215,18 @@ describe('US-4c / 指标 4 · 截断（finish_reason=length）', () => {
     expect(screen.getByText(/生成被截断，内容不完整/u)).toBeInTheDocument();
     expect(screen.getByText(/建议重新生成/u)).toBeInTheDocument();
 
+    // P1：结果标题给出「已生成 / 目标」对照
+    expect(screen.getByText(/\d+ 字 \/ 目标 6000 字/u)).toBeInTheDocument();
+
     // 第一次点采用：只弹确认，不写
     await user.click(screen.getByRole('button', { name: '采用为正文' }));
     expect(await screen.findByText('仍要采用不完整内容？')).toBeInTheDocument();
+    // P0 文案改为「采用后本章仍是草稿…」，不再承诺结果页有续写按钮
+    expect(
+      screen.getByText(
+        '采用后本章仍是草稿，可能缺少结尾。建议在编辑器里从末尾继续补写，补完再标「已完成」。',
+      ),
+    ).toBeInTheDocument();
     expect(onAccept).not.toHaveBeenCalled();
 
     // 取消：不写、仍保留结果
@@ -224,7 +238,12 @@ describe('US-4c / 指标 4 · 截断（finish_reason=length）', () => {
     // 再点采用 → 确认 → 写入
     await user.click(screen.getByRole('button', { name: '采用为正文' }));
     await user.click(await screen.findByRole('button', { name: '仍要采用' }));
-    await waitFor(() => expect(onAccept).toHaveBeenCalledWith('只写了一半的正文', 'replace'));
+    // 不完整稿采用时把 incomplete 事实作为第三参交给调用方（编辑器据此留痕）
+    await waitFor(() =>
+      expect(onAccept).toHaveBeenCalledWith('只写了一半的正文', 'replace', {
+        incomplete: 'truncated',
+      }),
+    );
     expect(onClose).toHaveBeenCalled();
   });
 });
@@ -243,9 +262,12 @@ describe('US-4d / 指标 4 · 用户中止（aborted）', () => {
     expect(screen.getByText('生成未完成')).toBeInTheDocument();
     expect(screen.getByDisplayValue('中断前的一段')).toBeInTheDocument();
 
+    expect(screen.getByText(/\d+ 字 \/ 目标 6000 字/u)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '采用为正文' }));
     await user.click(await screen.findByRole('button', { name: '仍要采用' }));
-    await waitFor(() => expect(onAccept).toHaveBeenCalledWith('中断前的一段', 'replace'));
+    await waitFor(() =>
+      expect(onAccept).toHaveBeenCalledWith('中断前的一段', 'replace', { incomplete: 'aborted' }),
+    );
   });
 });
 
@@ -256,6 +278,7 @@ describe('指标 4 · finishReason=null 视为未知（不误报）', () => {
     await startGeneration(user);
 
     expect(screen.getByText('生成完成')).toBeInTheDocument();
+    expect(screen.getByText(/\d+ 字 \/ 目标 6000 字/u)).toBeInTheDocument();
     expect(screen.queryByText(/生成被截断/u)).not.toBeInTheDocument();
     expect(screen.queryByText(/生成已中断/u)).not.toBeInTheDocument();
 

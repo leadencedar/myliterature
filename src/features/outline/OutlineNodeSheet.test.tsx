@@ -169,10 +169,10 @@ describe('注入清单', () => {
     const entries = await harness.repository.listEntries(novel.id);
     renderSheet(node, { entries });
 
-    expect(await screen.findByText('本次参考设定')).toBeInTheDocument();
+    expect(await screen.findByText('本次注入')).toBeInTheDocument();
     expect(screen.getByText(/核心设定 1 条（始终注入）：归墟界/)).toBeInTheDocument();
-    expect(screen.getByText(/相关设定：显式 1 条 \+ 提到 1 条，共/)).toBeInTheDocument();
-    expect(screen.getByText('提到 · 沈砚')).toBeInTheDocument();
+    expect(screen.getByText(/相关设定：手工关联 1 条 \+ 名字提到 1 条，共/)).toBeInTheDocument();
+    expect(screen.getByText('名字提到')).toBeInTheDocument();
     expect(entries.map((entry) => entry.id)).toEqual(
       expect.arrayContaining([pinned.id, linked.id, mentioned.id]),
     );
@@ -193,10 +193,10 @@ describe('注入清单', () => {
     const bodies = stubExpand();
     const { user } = renderSheet(node, { entries });
 
-    expect(screen.getByText('提到 · 沈砚')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '移除提到的设定：沈砚' }));
-    expect(screen.queryByText('提到 · 沈砚')).not.toBeInTheDocument();
-    expect(screen.queryByText('本次参考设定')).not.toBeInTheDocument();
+    expect(screen.getByText('名字提到')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '移除名字提到的设定：沈砚' }));
+    expect(screen.queryByText('名字提到')).not.toBeInTheDocument();
+    expect(screen.queryByText('本次注入')).not.toBeInTheDocument();
 
     await startExpand(user);
     const prompt = userPromptOf(bodies[0]!);
@@ -282,10 +282,16 @@ describe('采用后的关联确认', () => {
     const { user } = renderSheet(node, { entries });
 
     await startExpand(user);
+    // review 区给出本批细目数（单提案采用按钮不再带含义不明的「（1）」）
+    expect(screen.getByText('共 2 章细目，采用后可继续编辑。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '采用这份细目' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /采用这份细目/u }));
 
     const dialog = await screen.findByRole('dialog', { name: '确认自动关联' });
     expect(within(dialog).getByRole('button', { name: '确认关联（4 条）' })).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/取消的条目在本次打开节点抽屉期间不再建议/),
+    ).toBeInTheDocument();
     // 取消「渡口相遇」这个子节点的裴照关联
     await user.click(within(dialog).getByRole('button', { name: /关联建议：渡口相遇 · 裴照/ }));
     await user.click(within(dialog).getByRole('button', { name: '确认关联（3 条）' }));
@@ -384,7 +390,10 @@ describe('采用后的关联确认', () => {
     expect(
       within(dialog).getByRole('button', { name: /关联建议：渡口 · 裴照（继承）/ }),
     ).toBeInTheDocument();
-    await user.click(within(dialog).getByRole('button', { name: '全部保留' }));
+    // P1：去掉与确认重复的「全部保留」，未取消任何条目时直接点确认
+    expect(within(dialog).queryByRole('button', { name: '全部保留' })).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/关闭面板不会写入任何关联/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: '确认关联（2 条）' }));
 
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: '确认自动关联' })).not.toBeInTheDocument(),
@@ -496,7 +505,7 @@ describe('注入清单 · 预算', () => {
     renderSheet(node, { entries });
 
     expect(await screen.findByText(/未注入：/)).toBeInTheDocument();
-    expect(screen.getByText(/裴照（显式关联超出篇幅）/)).toBeInTheDocument();
+    expect(screen.getByText(/裴照（手工关联超出篇幅）/)).toBeInTheDocument();
     expect(screen.getByText(/沈砚（超出篇幅）/)).toBeInTheDocument();
   });
 });
