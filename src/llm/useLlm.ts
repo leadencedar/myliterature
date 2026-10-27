@@ -47,6 +47,11 @@ export interface TextRunOptions {
   user: string;
   /** 追加的历史消息，用于多轮续写 */
   history?: ChatMessage[];
+  /**
+   * 本次输出的 token 上限。不传时保持服务端默认（其余任务不受影响）；
+   * 整章生成按目标字数推导，用来区分「写完收尾」与「撞上限被截断」。
+   */
+  maxTokens?: number;
   signal?: AbortSignal;
 }
 
@@ -135,6 +140,7 @@ export function useLlm(): LlmRunner {
             model: resolveModel(settings, task),
             messages,
             temperature: profile.temperature,
+            ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
             thinking: profile.thinking,
             ...(profile.reasoningEffort ? { reasoningEffort: profile.reasoningEffort } : {}),
           },

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { NovelRepository } from '@/data/NovelRepository';
+import type { NovelRepository, OutlineTreeInputNode } from '@/data/NovelRepository';
 import { now } from '@/domain/primitives';
 import { RubricSchema, type Proposal } from '@/domain/schema';
 import {
@@ -150,24 +150,14 @@ export async function applyProposal(repo: NovelRepository, proposal: Proposal): 
         throw new Error('大纲内容为空，或没有以 # 开头的标题行');
       }
 
-      const anchor = parentId ?? null;
-      const before = await repo.listOutline(proposal.novelId);
-      if (anchor !== null && !before.some((node) => node.id === anchor)) {
-        throw new Error('要挂载的大纲节点已不存在，可能已被删除');
-      }
-
-      // replace 语义是「重排这一层」：清掉挂载点下的既有子节点再重建。
-      // 删节点会级联删子树，但章节正文不受影响，仅解除与节点的关联。
-      let startOrder = 0;
-      if (proposal.action === 'replace') {
-        for (const node of before.filter((item) => item.parentId === anchor)) {
-          await repo.deleteOutlineNode(node.id);
-        }
-      } else {
-        // 追加模式：接在已有兄弟节点之后
-        startOrder = before.filter((item) => item.parentId === anchor).length;
-      }
-      await createOutlineTree(repo, proposal.novelId, tree, anchor, startOrder);
+      // 挂载点的存在性/归属、append 的起始 order、replace 的删旧建新全部收在仓储事务里。
+      // apply 预先 listOutline 再删再建会留 TOCTOU 窗口，中途失败还会只删掉一半旧节点
+      await repo.commitOutlineSubtree(
+        proposal.novelId,
+        parentId ?? null,
+        toTreeInputNodes(tree),
+        proposal.action === 'replace' ? 'replace' : 'append',
+      );
       return;
     }
 
@@ -250,28 +240,18 @@ export async function applyProposal(repo: NovelRepository, proposal: Proposal): 
 }
 
 /**
- * 深度优先创建大纲树，父节点先落库以便子节点拿到 parentId。
- * `startOrder` 供追加场景使用，避免与挂载点下已有的兄弟节点撞 order。
+ * 文本树 → 仓储事务入参。
+ *
+ * 只搬运内容字段：id / parentId / order / 时间戳由仓储在事务内生成，
+ * 否则「先建后删」或「先删后建」都会在树里留下重复或空缺。
  */
-async function createOutlineTree(
-  repo: NovelRepository,
-  novelId: string,
-  nodes: OutlineDraft[],
-  parentId: string | null,
-  startOrder = 0,
-): Promise<void> {
-  for (const [index, node] of nodes.entries()) {
-    const created = await repo.createOutlineNode(novelId, {
-      title: node.title,
-      synopsis: node.synopsis,
-      targetWords: node.targetWords,
-      parentId,
-      order: startOrder + index,
-    });
-    if (node.children.length > 0) {
-      await createOutlineTree(repo, novelId, node.children, created.id);
-    }
-  }
+function toTreeInputNodes(nodes: readonly OutlineDraft[]): OutlineTreeInputNode[] {
+  return nodes.map((node) => ({
+    title: node.title,
+    synopsis: node.synopsis,
+    targetWords: node.targetWords,
+    children: toTreeInputNodes(node.children),
+  }));
 }
 
 function requireTargetId(proposal: Proposal): string {

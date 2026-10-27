@@ -67,6 +67,7 @@ import type {
   EntryQuery,
   EntryUpdateInput,
   NovelRepository,
+  OutlineTreeInputNode,
   ScenarioNodeInput,
   ScenarioSetupInput,
 } from '../NovelRepository';
@@ -93,6 +94,49 @@ function isUniversal(entry: KnowledgeEntry): boolean {
 
 const SCENARIO_GONE = '这个推演已不存在，可能已被删除';
 const NODE_GONE = '这一步已不存在';
+
+/**
+ * 广度优先收集 rootId 及其全部后代。rows 必须是同一本书的大纲行（树不跨书）。
+ *
+ * 抽成纯函数是为了让「删除节点」和「替换子树」用同一套删除规则：两套各写一遍，
+ * 迟早会有一边漏掉孙节点，留下悬空节点在大纲树渲染时凭空消失。
+ */
+function collectDescendantIds(rows: readonly OutlineNode[], rootId: string): Set<string> {
+  const doomed = new Set<string>([rootId]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const candidate of rows) {
+      if (!doomed.has(candidate.id) && candidate.parentId && doomed.has(candidate.parentId)) {
+        doomed.add(candidate.id);
+        grew = true;
+      }
+    }
+  }
+  return doomed;
+}
+
+/**
+ * 删除一批大纲节点并解除受影响章节的大纲关联。
+ *
+ * **调用方必须已经打开了 rw 事务**：这里刻意不自己开事务，否则会出现嵌套事务，
+ * 且「删子树 + 解链 + 建新树」就不再是同一个原子单元。章节本身保留 ——
+ * 正文是用户资产，节点删了只解除关联。
+ */
+async function deleteRowsAndUnlinkChapters(
+  db: AppDatabase,
+  novelId: string,
+  doomed: ReadonlySet<string>,
+): Promise<void> {
+  if (doomed.size === 0) return;
+  const timestamp = now();
+  await db.outlineNodes.bulkDelete([...doomed]);
+  const affected = await db.chapters.where('novelId').equals(novelId).toArray();
+  const relinked = affected
+    .filter((c) => c.outlineNodeId !== null && doomed.has(c.outlineNodeId))
+    .map((c) => ({ ...c, outlineNodeId: null, updatedAt: timestamp }));
+  if (relinked.length > 0) await db.chapters.bulkPut(relinked);
+}
 
 export class DexieNovelRepository implements NovelRepository {
   constructor(private readonly db: AppDatabase = defaultDb) {}
@@ -413,29 +457,97 @@ export class DexieNovelRepository implements NovelRepository {
   async deleteOutlineNode(id: string): Promise<void> {
     const node = await this.db.outlineNodes.get(id);
     if (!node) return;
-    const all = await this.listOutline(node.novelId);
-
+    const all = await this.db.outlineNodes.where('novelId').equals(node.novelId).toArray();
     // 广度优先收集整棵子树：留下悬空的子节点会让大纲树渲染时凭空消失
-    const doomed = new Set<string>([id]);
-    let grew = true;
-    while (grew) {
-      grew = false;
-      for (const candidate of all) {
-        if (!doomed.has(candidate.id) && candidate.parentId && doomed.has(candidate.parentId)) {
-          doomed.add(candidate.id);
-          grew = true;
-        }
-      }
-    }
+    const doomed = collectDescendantIds(all, id);
 
     await this.db.transaction('rw', [this.db.outlineNodes, this.db.chapters], async () => {
-      await this.db.outlineNodes.bulkDelete([...doomed]);
-      // 章节本身保留（正文是用户资产），仅解除与已删节点的关联
-      const affected = await this.db.chapters.where('novelId').equals(node.novelId).toArray();
-      const relinked = affected
-        .filter((c) => c.outlineNodeId && doomed.has(c.outlineNodeId))
-        .map((c) => ({ ...c, outlineNodeId: null, updatedAt: now() }));
-      if (relinked.length > 0) await this.db.chapters.bulkPut(relinked);
+      await deleteRowsAndUnlinkChapters(this.db, node.novelId, doomed);
+    });
+  }
+
+  async commitOutlineSubtree(
+    novelId: string,
+    anchorId: string | null,
+    nodes: readonly OutlineTreeInputNode[],
+    mode: 'append' | 'replace',
+  ): Promise<OutlineNode[]> {
+    // 空树等于「采用后什么都没发生」，却可能已经删掉了旧子节点：必须在删除前拒绝
+    if (nodes.length === 0) throw new Error('大纲内容为空，没有可创建的节点');
+
+    const tables = [this.db.outlineNodes, this.db.chapters];
+    // 删旧、解链、建新必须共用一个事务：中途失败要么回到旧树，要么留在新树，不能半棵
+    return this.db.transaction('rw', tables, async () => {
+      const all = await this.db.outlineNodes.where('novelId').equals(novelId).toArray();
+
+      // anchor 的存在性与归属都在事务内校验：调用方先查再写的做法留了 TOCTOU 窗口
+      if (anchorId !== null && !all.some((node) => node.id === anchorId)) {
+        throw new Error('要挂载的大纲节点已不存在，可能已被删除');
+      }
+
+      let startOrder = 0;
+      if (mode === 'replace') {
+        // anchor 非 null 时只替换该节点下的子层（锚点自身保留）；anchor 为 null 时是
+        // 整本顶层替换（立项「重新生成大纲」）：删除全部根节点及其子树后按顶层重建
+        const doomed = new Set<string>();
+        for (const sibling of all.filter((node) => node.parentId === anchorId)) {
+          for (const id of collectDescendantIds(all, sibling.id)) doomed.add(id);
+        }
+        await deleteRowsAndUnlinkChapters(this.db, novelId, doomed);
+      } else {
+        // 追加的起始 order 在事务内算：事务外算完再写，中间插入的兄弟会撞 order
+        startOrder = all.filter((node) => node.parentId === anchorId).length;
+      }
+
+      const created: OutlineNode[] = [];
+      const create = async (
+        list: readonly OutlineTreeInputNode[],
+        parentId: string | null,
+        baseOrder: number,
+      ): Promise<void> => {
+        for (const [index, input] of list.entries()) {
+          const timestamp = now();
+          const node = OutlineNodeSchema.parse({
+            id: newId(),
+            novelId,
+            parentId,
+            order: baseOrder + index,
+            title: input.title,
+            synopsis: input.synopsis,
+            targetWords: input.targetWords,
+            linkedEntryIds: input.linkedEntryIds ?? [],
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          });
+          // 父先落库：递归建子节点时要把父的 id 作为 parentId（也保证前序返回顺序）
+          await this.db.outlineNodes.add(node);
+          created.push(node);
+          if (input.children.length > 0) await create(input.children, node.id, 0);
+        }
+      };
+      await create(nodes, anchorId, startOrder);
+      return created;
+    });
+  }
+
+  async updateOutlineLinks(
+    updates: readonly { id: string; linkedEntryIds: readonly string[] }[],
+  ): Promise<void> {
+    if (updates.length === 0) return;
+    await this.db.transaction('rw', this.db.outlineNodes, async () => {
+      const rows = await this.db.outlineNodes.bulkGet(updates.map((update) => update.id));
+      const timestamp = now();
+      // 先把整批校验完再统一写：一个 id 不存在就整批失败，避免留下「一半节点已关联」
+      const next = updates.map((update, index) => {
+        const current = rows[index];
+        if (!current) throw new Error(`大纲节点不存在：${update.id}`);
+        return OutlineNodeSchema.parse({
+          ...current,
+          linkedEntryIds: [...update.linkedEntryIds],
+          updatedAt: timestamp,
+        });
+      });
+      await this.db.outlineNodes.bulkPut(next);
     });
   }
 

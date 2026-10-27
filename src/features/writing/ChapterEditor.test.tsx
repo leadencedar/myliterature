@@ -335,6 +335,7 @@ describe('整章生成', () => {
       thinking?: { type: string };
       model: string;
       stream: boolean;
+      max_tokens?: number;
     };
     const system = body.messages.find((message) => message.role === 'system')!.content;
     const userMessage = body.messages.find((message) => message.role === 'user')!.content;
@@ -343,9 +344,12 @@ describe('整章生成', () => {
     expect(system).toContain('归墟纪');
     expect(system).toContain('【必须遵守的核心设定】');
     expect(system).toContain('天地能量');
-    // 易变的东西进 user（大纲位置、字数要求）
+    // 易变的东西进 user（大纲位置、字数/场景结构要求）
     expect(userMessage).toContain('本章梗概：追兵临门，主角负伤。');
-    expect(userMessage).toContain('约 3000 字');
+    expect(userMessage).toContain('本章目标约 3000 字，场景数供参考：1–2 场。');
+    expect(userMessage).toContain('结尾收在梗概承诺的钩子上');
+    // 输出上限按目标字数推导：ceil(3000×1.8)+800=6200
+    expect(body.max_tokens).toBe(6200);
     // 正文创作关闭思维链、用常规模型、走流式
     expect(body.thinking).toEqual({ type: 'disabled' });
     expect(body.model).toBe('deepseek-flash');

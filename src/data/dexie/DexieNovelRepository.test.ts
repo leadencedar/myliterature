@@ -12,7 +12,11 @@ import {
   type WritingNorm,
   type WritingNormScope,
 } from '@/domain/schema';
-import type { ScenarioNodeInput, ScenarioSetupInput } from '@/data/NovelRepository';
+import type {
+  OutlineTreeInputNode,
+  ScenarioNodeInput,
+  ScenarioSetupInput,
+} from '@/data/NovelRepository';
 import { buildBackupFile, parseBackup, serializeBackup } from '@/features/export/backup';
 import { AppDatabase } from './db';
 import { DexieNovelRepository } from './DexieNovelRepository';
@@ -34,6 +38,21 @@ afterEach(async () => {
 
 async function seedNovel(title = '测试之书') {
   return repo.createNovel({ title });
+}
+
+/** 大纲子树入参：只描述内容，id / 顺序 / 时间戳由仓储在事务里生成 */
+function treeInput(
+  title: string,
+  children: OutlineTreeInputNode[] = [],
+  extra: { synopsis?: string; targetWords?: number | null; linkedEntryIds?: string[] } = {},
+): OutlineTreeInputNode {
+  return {
+    title,
+    synopsis: extra.synopsis ?? '',
+    targetWords: extra.targetWords ?? null,
+    ...(extra.linkedEntryIds ? { linkedEntryIds: extra.linkedEntryIds } : {}),
+    children,
+  };
 }
 
 describe('小说 CRUD', () => {
@@ -401,6 +420,315 @@ describe('大纲', () => {
       ]),
     ).resolves.toBeUndefined();
     expect((await repo.listOutline(novel.id))[0]?.order).toBe(5);
+  });
+});
+
+describe('大纲子树事务（commitOutlineSubtree）', () => {
+  it('追加：接在现有兄弟之后，父先落库子节点拿到 parentId，按前序返回', async () => {
+    const novel = await seedNovel();
+    const anchor = await repo.createOutlineNode(novel.id, { title: '第一卷' });
+    const existing = await repo.createOutlineNode(novel.id, {
+      title: '旧第一章',
+      parentId: anchor.id,
+    });
+
+    const created = await repo.commitOutlineSubtree(
+      novel.id,
+      anchor.id,
+      [treeInput('第一章', [treeInput('第一节')]), treeInput('第二章')],
+      'append',
+    );
+
+    // 前序：父在子之前，同层按入参顺序
+    expect(created.map((node) => node.title)).toEqual(['第一章', '第一节', '第二章']);
+    expect(created[0]).toMatchObject({ parentId: anchor.id, order: 1 });
+    expect(created[1]).toMatchObject({ parentId: created[0]!.id, order: 0 });
+    expect(created[2]).toMatchObject({ parentId: anchor.id, order: 2 });
+
+    const nodes = await repo.listOutline(novel.id);
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    expect(created.every((node) => byId.has(node.id))).toBe(true);
+    expect(byId.get(existing.id)?.order).toBe(0);
+    expect(nodes.filter((node) => node.parentId === anchor.id)).toHaveLength(3);
+  });
+
+  it('追加：anchor 为 null 时接在顶层末尾（立项建树）', async () => {
+    const novel = await seedNovel();
+    const firstRoot = await repo.createOutlineNode(novel.id, { title: '旧卷一' });
+
+    const created = await repo.commitOutlineSubtree(
+      novel.id,
+      null,
+      [treeInput('卷一', [treeInput('第一章')]), treeInput('卷二')],
+      'append',
+    );
+
+    expect(created.map((node) => node.order)).toEqual([1, 0, 2]);
+    expect(created[0]!.parentId).toBeNull();
+    expect(created[1]!.parentId).toBe(created[0]!.id);
+    const roots = (await repo.listOutline(novel.id)).filter((node) => node.parentId === null);
+    expect(roots.sort((a, b) => a.order - b.order).map((node) => node.title)).toEqual([
+      '旧卷一',
+      '卷一',
+      '卷二',
+    ]);
+    expect(roots.find((node) => node.id === firstRoot.id)).toBeDefined();
+  });
+
+  it('替换：删除锚点下整棵子树并解除章节关联，锚点与其他分支保留', async () => {
+    const novel = await seedNovel();
+    const anchor = await repo.createOutlineNode(novel.id, { title: '第一卷' });
+    const oldChapter = await repo.createOutlineNode(novel.id, {
+      title: '旧章',
+      parentId: anchor.id,
+      linkedEntryIds: ['entry-old'],
+    });
+    const oldSection = await repo.createOutlineNode(novel.id, {
+      title: '旧节',
+      parentId: oldChapter.id,
+    });
+    // 锚点之外的节点不应被 replace 波及
+    const otherVolume = await repo.createOutlineNode(novel.id, { title: '第二卷' });
+    const otherChapter = await repo.createOutlineNode(novel.id, {
+      title: '第二章',
+      parentId: otherVolume.id,
+    });
+    const chapter = await repo.createChapter(novel.id, {
+      title: '旧章正文',
+      outlineNodeId: oldSection.id,
+    });
+
+    const created = await repo.commitOutlineSubtree(
+      novel.id,
+      anchor.id,
+      [treeInput('新章', [treeInput('新节')])],
+      'replace',
+    );
+
+    const nodes = await repo.listOutline(novel.id);
+    const ids = new Set(nodes.map((node) => node.id));
+    // 旧子层连同孙节点一起消失，锚点自身保留
+    expect(ids.has(oldChapter.id)).toBe(false);
+    expect(ids.has(oldSection.id)).toBe(false);
+    expect(ids.has(anchor.id)).toBe(true);
+    expect(ids.has(otherVolume.id)).toBe(true);
+    expect(ids.has(otherChapter.id)).toBe(true);
+    expect(nodes.filter((node) => node.parentId === anchor.id)).toHaveLength(1);
+    expect(created.map((node) => node.title)).toEqual(['新章', '新节']);
+    expect(created[0]).toMatchObject({ parentId: anchor.id, order: 0 });
+    expect(created[1]).toMatchObject({ parentId: created[0]!.id, order: 0 });
+
+    // 正文是用户资产：只解除关联，不删章节
+    const kept = await repo.getChapter(chapter.id);
+    expect(kept).toBeDefined();
+    expect(kept?.outlineNodeId).toBeNull();
+  });
+
+  it('整本替换（anchor 为 null）：清掉全部旧根与子树、解链章节，再按顶层重建', async () => {
+    const novel = await seedNovel();
+    const oldRoot = await repo.createOutlineNode(novel.id, { title: '旧第一卷' });
+    const oldChapter = await repo.createOutlineNode(novel.id, {
+      title: '旧第一章',
+      parentId: oldRoot.id,
+      linkedEntryIds: ['entry-old'],
+    });
+    const chapter = await repo.createChapter(novel.id, {
+      title: '旧章正文',
+      outlineNodeId: oldChapter.id,
+    });
+
+    const created = await repo.commitOutlineSubtree(
+      novel.id,
+      null,
+      [treeInput('新第一卷', [treeInput('新第一章')]), treeInput('新第二卷')],
+      'replace',
+    );
+
+    const nodes = await repo.listOutline(novel.id);
+    // 旧根与旧子节点都被清掉，新树无重复
+    expect(nodes.map((node) => node.id).sort()).toEqual(created.map((node) => node.id).sort());
+    expect(nodes).toHaveLength(3);
+    const roots = nodes.filter((node) => node.parentId === null).sort((a, b) => a.order - b.order);
+    expect(roots.map((node) => node.title)).toEqual(['新第一卷', '新第二卷']);
+    expect(roots.map((node) => node.order)).toEqual([0, 1]);
+    expect(nodes.filter((node) => node.parentId === created[0]!.id)).toHaveLength(1);
+    expect(created.map((node) => node.title)).toEqual(['新第一卷', '新第一章', '新第二卷']);
+
+    const kept = await repo.getChapter(chapter.id);
+    expect(kept?.outlineNodeId).toBeNull();
+  });
+
+  it('nodes 为空时抛错，且不删除任何旧节点', async () => {
+    const novel = await seedNovel();
+    const anchor = await repo.createOutlineNode(novel.id, { title: '第一卷' });
+    const child = await repo.createOutlineNode(novel.id, {
+      title: '旧章',
+      parentId: anchor.id,
+    });
+
+    await expect(repo.commitOutlineSubtree(novel.id, anchor.id, [], 'replace')).rejects.toThrow(
+      '大纲内容为空',
+    );
+    await expect(repo.commitOutlineSubtree(novel.id, null, [], 'append')).rejects.toThrow(
+      '大纲内容为空',
+    );
+
+    const nodes = await repo.listOutline(novel.id);
+    expect(nodes.map((node) => node.id)).toContain(child.id);
+  });
+
+  it('anchor 不存在或属于别的书时抛错，什么都不写', async () => {
+    const novel = await seedNovel();
+    const other = await seedNovel('另一本书');
+    const foreign = await repo.createOutlineNode(other.id, { title: '别处的卷' });
+
+    await expect(
+      repo.commitOutlineSubtree(novel.id, 'ghost', [treeInput('新章')], 'append'),
+    ).rejects.toThrow('已不存在');
+    await expect(
+      repo.commitOutlineSubtree(novel.id, foreign.id, [treeInput('新章')], 'append'),
+    ).rejects.toThrow('已不存在');
+    await expect(
+      repo.commitOutlineSubtree(novel.id, foreign.id, [treeInput('新章')], 'replace'),
+    ).rejects.toThrow('已不存在');
+
+    expect(await repo.listOutline(novel.id)).toHaveLength(0);
+    // 别的书的大纲也不能被跨书删除
+    expect((await repo.listOutline(other.id)).map((node) => node.id)).toEqual([foreign.id]);
+  });
+
+  it('替换中途失败整体回滚：旧子树、章节关联都还在，新节点一个也不留', async () => {
+    const novel = await seedNovel();
+    const anchor = await repo.createOutlineNode(novel.id, { title: '第一卷' });
+    const oldChapter = await repo.createOutlineNode(novel.id, {
+      title: '旧章',
+      parentId: anchor.id,
+    });
+    const chapter = await repo.createChapter(novel.id, {
+      title: '正文',
+      outlineNodeId: oldChapter.id,
+    });
+
+    // 第一棵子树合法（已写入），第二棵标题为空在 parse 时失败 —— 整批必须回滚
+    await expect(
+      repo.commitOutlineSubtree(
+        novel.id,
+        anchor.id,
+        [treeInput('合法新章'), { ...treeInput('坏章'), title: '' }],
+        'replace',
+      ),
+    ).rejects.toThrow();
+
+    const nodes = await repo.listOutline(novel.id);
+    expect(nodes.map((node) => node.id)).toContain(oldChapter.id);
+    expect(nodes.some((node) => node.title === '合法新章')).toBe(false);
+    expect((await repo.getChapter(chapter.id))?.outlineNodeId).toBe(oldChapter.id);
+  });
+
+  it('整本替换中途失败时回滚，不留半棵树', async () => {
+    const novel = await seedNovel();
+    const oldRoot = await repo.createOutlineNode(novel.id, { title: '旧第一卷' });
+    const oldChapter = await repo.createOutlineNode(novel.id, {
+      title: '旧第一章',
+      parentId: oldRoot.id,
+    });
+    const chapter = await repo.createChapter(novel.id, {
+      title: '正文',
+      outlineNodeId: oldChapter.id,
+    });
+
+    // 新树的第一个根合法、其子节点标题为空：删除旧树与建新树必须是同一个原子单元
+    await expect(
+      repo.commitOutlineSubtree(
+        novel.id,
+        null,
+        [treeInput('新第一卷', [{ ...treeInput('坏章'), title: '' }])],
+        'replace',
+      ),
+    ).rejects.toThrow();
+
+    const nodes = await repo.listOutline(novel.id);
+    expect(nodes.map((node) => node.id).sort()).toEqual([oldRoot.id, oldChapter.id].sort());
+    expect((await repo.getChapter(chapter.id))?.outlineNodeId).toBe(oldChapter.id);
+  });
+
+  it('内容字段与预留的 linkedEntryIds 原样落库（M3 用）', async () => {
+    const novel = await seedNovel();
+
+    const created = await repo.commitOutlineSubtree(
+      novel.id,
+      null,
+      [
+        treeInput('第一章', [], {
+          synopsis: '主角在渡口等人。',
+          targetWords: 6000,
+          linkedEntryIds: ['entry-shenyan', 'entry-peizhao'],
+        }),
+      ],
+      'append',
+    );
+
+    expect(created[0]).toMatchObject({
+      title: '第一章',
+      synopsis: '主角在渡口等人。',
+      targetWords: 6000,
+      linkedEntryIds: ['entry-shenyan', 'entry-peizhao'],
+      status: 'planned',
+    });
+    expect((await repo.listOutline(novel.id))[0]?.linkedEntryIds).toEqual([
+      'entry-shenyan',
+      'entry-peizhao',
+    ]);
+  });
+});
+
+describe('大纲关联批量写（updateOutlineLinks）', () => {
+  it('一次写入多个节点的关联，标题/梗概/顺序都不动', async () => {
+    const novel = await seedNovel();
+    const a = await repo.createOutlineNode(novel.id, {
+      title: 'A',
+      synopsis: '梗概 A',
+      targetWords: 3000,
+      linkedEntryIds: ['entry-old'],
+    });
+    const b = await repo.createOutlineNode(novel.id, { title: 'B' });
+
+    await repo.updateOutlineLinks([
+      { id: a.id, linkedEntryIds: ['entry-1', 'entry-2'] },
+      { id: b.id, linkedEntryIds: [] },
+    ]);
+
+    const byId = new Map((await repo.listOutline(novel.id)).map((node) => [node.id, node]));
+    expect(byId.get(a.id)).toMatchObject({
+      title: 'A',
+      synopsis: '梗概 A',
+      targetWords: 3000,
+      order: 0,
+      linkedEntryIds: ['entry-1', 'entry-2'],
+    });
+    expect(byId.get(b.id)?.linkedEntryIds).toEqual([]);
+  });
+
+  it('任一 id 不存在时整批失败，已存在的节点保持原关联', async () => {
+    const novel = await seedNovel();
+    const a = await repo.createOutlineNode(novel.id, {
+      title: 'A',
+      linkedEntryIds: ['entry-old'],
+    });
+
+    await expect(
+      repo.updateOutlineLinks([
+        { id: a.id, linkedEntryIds: ['entry-1'] },
+        { id: 'ghost', linkedEntryIds: ['entry-2'] },
+      ]),
+    ).rejects.toThrow('大纲节点不存在');
+
+    // 回滚：不能留下「前一个节点已写、后一个失败」的半套关联
+    expect((await repo.listOutline(novel.id))[0]?.linkedEntryIds).toEqual(['entry-old']);
+  });
+
+  it('空数组是 no-op', async () => {
+    await expect(repo.updateOutlineLinks([])).resolves.toBeUndefined();
   });
 });
 

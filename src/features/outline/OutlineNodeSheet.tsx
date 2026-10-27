@@ -1,8 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRepository } from '@/data/RepositoryProvider';
+import { selectPlanningEntries, type PlanningEntryBlock } from '@/context/planningContext';
 import { formatTokens } from '@/context/tokens';
 import { useInvalidate, useRepoQuery } from '@/data/useRepoQuery';
-import type { Category, KnowledgeEntry, Novel, OutlineNode, StyleProfile } from '@/domain/schema';
+import type {
+  Category,
+  Chapter,
+  KnowledgeEntry,
+  Novel,
+  OutlineNode,
+  StyleProfile,
+} from '@/domain/schema';
 import { normsInScope } from '@/domain/writingNorm';
 import { LlmError } from '@/llm/errors';
 import { useLlm } from '@/llm/useLlm';
@@ -16,6 +24,7 @@ import { TextAreaField, TextField } from '@/ui/Field';
 import { ConfirmDialog, Sheet } from '@/ui/Sheet';
 import { ProposalInbox } from '../proposals/ProposalInbox';
 import { useFromOldMainline } from '../scenario/useFromOldMainline';
+import { OutlineLinkConfirmSheet, type LinkConfirmResult } from './OutlineLinkConfirmSheet';
 import {
   OutlineExpandSchema,
   ancestorsOf,
@@ -24,6 +33,7 @@ import {
   toChildDrafts,
 } from './outlineExpand';
 import { MAX_OUTLINE_DEPTH, OUTLINE_STATUS_LABELS } from './outlineTree';
+import { suggestOutlineLinks, type ChildLinkSuggestion } from './suggestOutlineLinks';
 
 const STATUS_OPTIONS = (Object.keys(OUTLINE_STATUS_LABELS) as OutlineNode['status'][]).map(
   (value) => ({ value, label: OUTLINE_STATUS_LABELS[value] }),
@@ -35,6 +45,32 @@ type ExpandState =
   | { phase: 'review'; batchId: string }
   | { phase: 'error'; message: string };
 
+/** 某节点及其全部后代的 id（含自身）；replace 细化会删除这些节点 */
+function subtreeIdsOf(nodes: OutlineNode[], rootId: string): Set<string> {
+  const byParent = new Map<string | null, OutlineNode[]>();
+  for (const node of nodes) {
+    const siblings = byParent.get(node.parentId) ?? [];
+    siblings.push(node);
+    byParent.set(node.parentId, siblings);
+  }
+  const ids = new Set<string>();
+  const queue = [rootId];
+  while (queue.length > 0) {
+    const id = queue.pop()!;
+    if (ids.has(id)) continue;
+    ids.add(id);
+    for (const child of byParent.get(id) ?? []) queue.push(child.id);
+  }
+  return ids;
+}
+
+/** 注入清单里一条目的来源标签 */
+function planningSourceLabel(block: PlanningEntryBlock): string {
+  if (block.reason === 'core') return '核心';
+  if (block.reason === 'linked') return '关联';
+  return `提到 · ${block.matchedName ?? block.entry.title}`;
+}
+
 export function OutlineNodeSheet({
   open,
   novel,
@@ -44,6 +80,9 @@ export function OutlineNodeSheet({
   entries,
   categories,
   depth,
+  chapters,
+  openThreads,
+  rollingSummary,
   onWrite,
   onClose,
 }: {
@@ -56,6 +95,12 @@ export function OutlineNodeSheet({
   categories: Category[];
   /** 该节点当前深度，0 为顶层。决定还能否再往下拆 */
   depth: number;
+  /** replace 细化会解除这些已写章节的大纲关联（正文保留）。不传时影响数按 0 处理 */
+  chapters?: readonly Chapter[];
+  /** 主线最近一份摘要的累计伏笔；细化前注入 */
+  openThreads?: readonly string[];
+  /** 作品滚动进展；仅顶层细化时注入 */
+  rollingSummary?: string;
   /** 提供时显示「写这一章」入口；只对没有子节点的叶子节点有意义 */
   onWrite?: (node: OutlineNode) => void | Promise<void>;
   onClose: () => void;
@@ -78,6 +123,19 @@ export function OutlineNodeSheet({
   const [childCount, setChildCount] = useState(5);
   const [expandExtra, setExpandExtra] = useState('');
   const [expand, setExpand] = useState<ExpandState>({ phase: 'idle' });
+  /** 「额外要求」不落库（D2），但本次会话内临时移除的命中项要连续生效 */
+  const [removedMentionIds, setRemovedMentionIds] = useState<string[]>([]);
+  const [confirmReplace, setConfirmReplace] = useState(false);
+  const [linkPanel, setLinkPanel] = useState<ChildLinkSuggestion[] | null>(null);
+  const [linkBusy, setLinkBusy] = useState(false);
+
+  // 会话内关联抑制：「取消/跳过过的条目本次会话不再建议」。replace 细化会换掉子节点 id，
+  // 只按 childId 记忆会让取消过的条目在再次细化时重新冒出来（需求指标 2），所以同时记条目
+  const suppressedPairsRef = useRef<Set<string>>(new Set());
+  const suppressedEntryIdsRef = useRef<Set<string>>(new Set());
+  /** 细化前快照子节点 id：采用后只对差集（本批新节点）建议关联，旧节点不重复建议 */
+  const childrenSnapshotRef = useRef<Set<string>>(new Set());
+  const pendingExpandRef = useRef<{ batchId: string; parentId: string } | null>(null);
 
   // 只用于「将带上 N 份写作规范」这行提示；细化时另从仓储读最新值。
   // 查询未就绪或 N 为 0 时不渲染，界面与没有规范时一致
@@ -102,6 +160,12 @@ export function OutlineNodeSheet({
       setError(undefined);
       setExpand({ phase: 'idle' });
       setExpandExtra('');
+      setRemovedMentionIds([]);
+      setConfirmReplace(false);
+      setLinkPanel(null);
+      suppressedPairsRef.current = new Set();
+      suppressedEntryIdsRef.current = new Set();
+      pendingExpandRef.current = null;
     }
     wasOpen.current = open;
   }, [open]);
@@ -111,15 +175,49 @@ export function OutlineNodeSheet({
     .sort((a, b) => a.order - b.order);
   const canExpand = depth + 1 < MAX_OUTLINE_DEPTH;
 
-  async function save() {
+  // 注入清单用的选择结果：用当前表单值（含未保存的梗概/额外要求）实时算，
+  // 细化时则用落盘后的值重算一次（见 runExpand），两者口径一致
+  const ancestors = ancestorsOf(nodes, node.id);
+  const mentionTexts = [
+    title,
+    synopsis,
+    expandExtra,
+    ...ancestors.slice(-2).map((item) => item.synopsis),
+  ];
+  const selection = selectPlanningEntries({
+    texts: mentionTexts,
+    entries: entries.filter((entry) => !removedMentionIds.includes(entry.id)),
+    categories,
+    linkedEntryIds: linked,
+  });
+  const linkedCount = selection.related.filter((block) => block.reason === 'linked').length;
+  const mentionedCount = selection.related.filter((block) => block.reason === 'mentioned').length;
+  const relatedTokens = selection.related.reduce((sum, block) => sum + block.tokens, 0);
+  const hasInjectionInfo =
+    selection.core.length > 0 || selection.related.length > 0 || selection.dropped.length > 0;
+
+  // replace 影响告知：替换的是「这个节点以下」的整棵子树（含孙节点）
+  const subtreeIds = subtreeIdsOf(nodes, node.id);
+  const affectedChapters = (chapters ?? []).filter(
+    (chapter) => chapter.outlineNodeId !== null && subtreeIds.has(chapter.outlineNodeId),
+  );
+  const affectedWithContent = affectedChapters.filter((chapter) => chapter.content.trim()).length;
+
+  /**
+   * 把当前表单写库并返回落库后的节点；失败返回 undefined（错误已进 state）。
+   * save 与 runExpand 共用：细化前必须先落盘，否则「改了梗概没保存就细化」
+   * 会拿旧梗概生成（M1 要修的 bug 之一）。
+   */
+  async function persistDraft(): Promise<OutlineNode | undefined> {
     if (!title.trim()) {
       setError('标题不能为空');
-      return;
+      return undefined;
     }
     setSaving(true);
+    setError(undefined);
     try {
       const parsedWords = targetWords.trim() ? Number(targetWords.trim()) : null;
-      await repository.updateOutlineNode(node.id, {
+      const saved = await repository.updateOutlineNode(node.id, {
         title: title.trim(),
         synopsis: synopsis.trim(),
         targetWords:
@@ -130,12 +228,18 @@ export function OutlineNodeSheet({
         linkedEntryIds: linked,
       });
       invalidate();
-      onClose();
+      return saved;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '保存失败');
+      return undefined;
     } finally {
       setSaving(false);
     }
+  }
+
+  async function save() {
+    const saved = await persistDraft();
+    if (saved) onClose();
   }
 
   async function remove() {
@@ -145,24 +249,57 @@ export function OutlineNodeSheet({
     onClose();
   }
 
+  function replaceImpactMessage(): string {
+    const replaced = Math.max(0, subtreeIds.size - 1);
+    return [
+      `将替换「${node.title}」下现有的 ${replaced} 个子节点（含孙节点）。`,
+      `其中约 ${affectedChapters.length} 个已挂章节（${affectedWithContent} 个已有正文）会解除大纲关联；`,
+      '正文保留，不会删除，之后可以重新关联。',
+      '旧细目会从大纲树删除；采用前可以在提案里对照原细目。',
+    ].join('');
+  }
+
   async function runExpand() {
+    const saved = await persistDraft();
+    if (!saved) return;
     setExpand({ phase: 'running' });
+    // 快照必须在请求前取：采用后要按差集只对本批新节点建议关联
+    childrenSnapshotRef.current = new Set(children.map((child) => child.id));
     try {
-      const linkedEntries = entries.filter((entry) => linked.includes(entry.id));
+      const linkedEntries = entries.filter((entry) => saved.linkedEntryIds.includes(entry.id));
       // 发请求前读最新规范，避免用到面板打开时的旧数据；读取失败走下面现有的 catch
       const norms = await repository.listWritingNorms(novel.id);
+      // 用落盘后的值重算选择：面板上看到的是表单值，这里必须与真正写库的值一致
+      const savedAncestors = ancestorsOf(nodes, saved.id);
+      const runSelection = selectPlanningEntries({
+        texts: [
+          saved.title,
+          saved.synopsis,
+          expandExtra,
+          ...savedAncestors.slice(-2).map((item) => item.synopsis),
+        ],
+        entries: entries.filter((entry) => !removedMentionIds.includes(entry.id)),
+        categories,
+        linkedEntryIds: saved.linkedEntryIds,
+      });
+      const threads = (openThreads ?? []).map((thread) => thread.trim()).filter(Boolean);
       const result = await llm.runStructured('outline-expand', {
         schema: OutlineExpandSchema,
         schemaName: 'OutlineChildren',
-        system: buildExpandSystemPrompt(novel, style, norms),
+        system: buildExpandSystemPrompt(novel, style, norms, runSelection.core),
         user: buildExpandUserPrompt({
-          node,
-          ancestors: ancestorsOf(nodes, node.id),
-          siblings: nodes.filter((item) => item.parentId === node.parentId),
+          node: saved,
+          ancestors: savedAncestors,
+          siblings: nodes.filter((item) => item.parentId === saved.parentId),
           existingChildren: children,
+          // 生产调用只传 related（完整字段）；linkedEntries 是旧调用的回退路径
           linkedEntries,
           count: childCount,
           ...(expandExtra ? { extra: expandExtra } : {}),
+          related: runSelection.related,
+          ...(threads.length > 0 ? { openThreads: threads } : {}),
+          ...(rollingSummary?.trim() ? { rollingSummary } : {}),
+          depth,
         }),
       });
 
@@ -174,9 +311,9 @@ export function OutlineNodeSheet({
         batchId,
         origin: 'generate' as const,
         target: 'outlineTree' as const,
-        label: `细化 · ${node.title}`,
+        label: `细化 · ${saved.title}`,
         specs,
-        sourceRef: node.title,
+        sourceRef: saved.title,
       };
 
       // 已有子节点时用 replace（重排这一层），否则 create（追加）
@@ -184,14 +321,15 @@ export function OutlineNodeSheet({
         children.length > 0
           ? buildReplaceProposal({
               ...common,
-              targetId: node.id,
+              targetId: saved.id,
               // 传完整节点列表 + 挂载点，这样孙节点也会被包含进原值
-              current: { outlineText: serializeOutlineTree(buildOutlineDrafts(nodes, node.id)) },
-              payload: { outlineText, parentId: node.id },
+              current: { outlineText: serializeOutlineTree(buildOutlineDrafts(nodes, saved.id)) },
+              payload: { outlineText, parentId: saved.id },
             })
-          : buildCreateProposal({ ...common, payload: { outlineText, parentId: node.id } });
+          : buildCreateProposal({ ...common, payload: { outlineText, parentId: saved.id } });
 
       await repository.createProposals([proposal]);
+      pendingExpandRef.current = { batchId, parentId: saved.id };
       invalidate();
       setExpand({ phase: 'review', batchId });
     } catch (cause) {
@@ -207,9 +345,103 @@ export function OutlineNodeSheet({
     }
   }
 
+  /** 提案有采用结果后：只对本批新子节点建议关联；被拒绝/失败则什么都不做 */
+  async function handleExpandSettled() {
+    const pending = pendingExpandRef.current;
+    pendingExpandRef.current = null;
+    setExpand({ phase: 'idle' });
+    if (!pending) return;
+    try {
+      // onSettled 在「全部拒绝」时也会被调用：先确认这一批确实有 accepted
+      const accepted = await repository.listProposals(novel.id, {
+        status: 'accepted',
+        batchId: pending.batchId,
+      });
+      if (accepted.length === 0) return;
+
+      const [freshNodes, freshEntries] = await Promise.all([
+        repository.listOutline(novel.id),
+        repository.listEntries(novel.id),
+      ]);
+      const parent = freshNodes.find((item) => item.id === pending.parentId);
+      if (!parent) return;
+      const snapshot = childrenSnapshotRef.current;
+      const newChildren = freshNodes
+        .filter((item) => item.parentId === parent.id && !snapshot.has(item.id))
+        .sort((a, b) => a.order - b.order);
+      if (newChildren.length === 0) return;
+
+      const suppressed = new Set(suppressedPairsRef.current);
+      for (const child of newChildren) {
+        for (const entryId of suppressedEntryIdsRef.current) {
+          suppressed.add(`${child.id}:${entryId}`);
+        }
+      }
+      const suggestions = suggestOutlineLinks({
+        parent,
+        children: newChildren,
+        entries: freshEntries,
+        ...(suppressed.size > 0 ? { suppressed } : {}),
+      });
+      if (suggestions.length > 0) setLinkPanel(suggestions);
+    } catch {
+      // 关联建议只是锦上添花：读取失败不打扰作者，links 仍可在抽屉里手改
+    }
+  }
+
+  async function confirmLinks(result: LinkConfirmResult) {
+    const childrenById = new Map((linkPanel ?? []).map(({ child }) => [child.id, child] as const));
+    for (const pair of result.suppressed) {
+      suppressedPairsRef.current.add(`${pair.childId}:${pair.entryId}`);
+      suppressedEntryIdsRef.current.add(pair.entryId);
+    }
+    // 写库一次批量提交：逐条写一半再刷新会留下「部分节点已关联」的半套状态
+    const updates = result.selectedByChild
+      .map(({ childId, entryIds }) => {
+        const child = childrenById.get(childId);
+        if (!child || entryIds.length === 0) return null;
+        return {
+          id: childId,
+          linkedEntryIds: [...new Set([...child.linkedEntryIds, ...entryIds])],
+        };
+      })
+      .filter((update): update is { id: string; linkedEntryIds: string[] } => update !== null);
+    setLinkBusy(true);
+    try {
+      if (updates.length > 0) await repository.updateOutlineLinks(updates);
+      invalidate();
+      setLinkPanel(null);
+    } catch (cause) {
+      setExpand({
+        phase: 'error',
+        message: cause instanceof Error ? cause.message : '关联写入失败',
+      });
+      setLinkPanel(null);
+    } finally {
+      setLinkBusy(false);
+    }
+  }
+
+  /** 全部跳过：不写库，但本次会话内不再建议这些条目 */
+  function skipLinks(result: LinkConfirmResult) {
+    for (const pair of result.suppressed) {
+      suppressedPairsRef.current.add(`${pair.childId}:${pair.entryId}`);
+      suppressedEntryIdsRef.current.add(pair.entryId);
+    }
+    setLinkPanel(null);
+  }
+
   function toggleEntry(entryId: string) {
+    // 作者手动勾选优先：之前临时移除过的命中项直接恢复，不再受「已移除」影响
+    setRemovedMentionIds((current) => current.filter((id) => id !== entryId));
     setLinked((current) =>
       current.includes(entryId) ? current.filter((id) => id !== entryId) : [...current, entryId],
+    );
+  }
+
+  function removeMention(entryId: string) {
+    setRemovedMentionIds((current) =>
+      current.includes(entryId) ? current : [...current, entryId],
     );
   }
 
@@ -339,6 +571,65 @@ export function OutlineNodeSheet({
                 placeholder="例如：第一节要交代背景；最后一节留悬念。"
                 onChange={(event) => setExpandExtra(event.target.value)}
               />
+              {/* D2：额外要求是一次性输入，不写库；要长期生效必须写进梗概 */}
+              <p className="-mt-2 text-xs leading-relaxed text-ink-500">
+                额外要求只影响本次细化，不会保存。要让它影响后续章节，请写进梗概。
+              </p>
+              {/* 注入清单：细化前让作者看到「这次会带上哪些设定」，mentioned 可临时移除（不写库） */}
+              {hasInjectionInfo ? (
+                <div className="flex flex-col gap-1.5 rounded-lg bg-paper-sunken px-3 py-2">
+                  <p className="text-xs font-medium text-ink-700">本次参考设定</p>
+                  {selection.core.length > 0 ? (
+                    <p className="text-xs leading-relaxed text-ink-500">
+                      核心设定 {selection.core.length} 条（始终注入）：
+                      {selection.core.map((block) => block.entry.title).join('、')}
+                    </p>
+                  ) : null}
+                  {selection.related.length > 0 ? (
+                    <>
+                      <p className="text-xs leading-relaxed text-ink-500">
+                        {`相关设定：显式 ${linkedCount} 条 + 提到 ${mentionedCount} 条，共${formatTokens(
+                          relatedTokens,
+                        )}`}
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {selection.related.map((block) => (
+                          <span
+                            key={block.entry.id}
+                            className="inline-flex items-center gap-1 rounded-full border border-ink-100 bg-paper-raised px-2 py-1 text-xs text-ink-700"
+                          >
+                            {block.entry.title}
+                            <span className="text-ink-300">{planningSourceLabel(block)}</span>
+                            {block.reason === 'mentioned' ? (
+                              <button
+                                type="button"
+                                aria-label={`移除提到的设定：${block.entry.title}`}
+                                onClick={() => removeMention(block.entry.id)}
+                                className="text-ink-300"
+                              >
+                                ×
+                              </button>
+                            ) : null}
+                          </span>
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
+                  {selection.dropped.length > 0 ? (
+                    <p className="text-xs leading-relaxed text-ink-300">
+                      未注入：
+                      {selection.dropped
+                        .map(
+                          (block) =>
+                            `${block.entry.title}（${
+                              block.reason === 'linked' ? '显式关联超出篇幅' : '超出篇幅'
+                            }）`,
+                        )
+                        .join('、')}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
               {planningNorms.length > 0 ? (
                 <p className="text-xs text-ink-500">
                   将带上 {planningNorms.length} 份写作规范（{formatTokens(planningTokens)}）
@@ -348,8 +639,12 @@ export function OutlineNodeSheet({
                 variant="secondary"
                 size="md"
                 block
-                disabled={!llm.configured || expand.phase === 'running'}
-                onClick={runExpand}
+                disabled={!llm.configured || expand.phase === 'running' || saving}
+                onClick={() => {
+                  // 有子节点时 replace 会删掉旧细目并解链章节：先明确告知影响，确认才发请求
+                  if (children.length > 0) setConfirmReplace(true);
+                  else void runExpand();
+                }}
               >
                 {expand.phase === 'running' ? '正在细化…' : '细化这一节点'}
               </Button>
@@ -375,7 +670,7 @@ export function OutlineNodeSheet({
               novelId={novel.id}
               batchId={expand.batchId}
               acceptAllLabel="采用这份细目"
-              onSettled={() => setExpand({ phase: 'idle' })}
+              onSettled={() => void handleExpandSettled()}
             />
           ) : null}
         </div>
@@ -397,6 +692,27 @@ export function OutlineNodeSheet({
         destructive
         onConfirm={remove}
         onCancel={() => setConfirmDelete(false)}
+      />
+
+      <ConfirmDialog
+        open={confirmReplace}
+        title="替换现有的子节点？"
+        message={replaceImpactMessage()}
+        confirmLabel="继续细化"
+        onConfirm={() => {
+          setConfirmReplace(false);
+          void runExpand();
+        }}
+        onCancel={() => setConfirmReplace(false)}
+      />
+
+      <OutlineLinkConfirmSheet
+        open={linkPanel !== null}
+        suggestions={linkPanel ?? []}
+        busy={linkBusy}
+        onConfirm={(result) => void confirmLinks(result)}
+        onSkip={skipLinks}
+        onClose={() => setLinkPanel(null)}
       />
     </>
   );

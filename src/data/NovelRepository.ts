@@ -63,6 +63,22 @@ export type EntryUpdateInput = Partial<KnowledgeEntry>;
 /** createScenario 的开局设定：主角只给条目 id，cast 的 id 由仓储生成 */
 export type ScenarioSetupInput = Omit<ScenarioSetup, 'cast'> & { cast: { entryId: string }[] };
 
+/**
+ * 整棵大纲子树的事务化落库入参。
+ *
+ * 与 `OutlineNode` 的区别是「还没有身份」：id / novelId / parentId / order / 时间戳
+ * 全部由仓储在事务里生成，调用方只描述这棵树长什么样。这样「替换一层」才能
+ * 在一个事务里删旧建新 —— 先建后删会撞 order，先删后建失败就只剩半棵树。
+ */
+export interface OutlineTreeInputNode {
+  title: string;
+  synopsis: string;
+  targetWords: number | null;
+  /** 可选：M1 的关联确认走 updateOutlineLinks，不经过这里；预留给 M3 */
+  linkedEntryIds?: string[];
+  children: OutlineTreeInputNode[];
+}
+
 /** appendScenarioNode 的入参：身份、层级、摘要与时间由仓储掌管 */
 export type ScenarioNodeInput = Omit<
   ScenarioNode,
@@ -126,6 +142,32 @@ export interface NovelRepository {
   updateOutlineNode(id: string, patch: Partial<OutlineNode>): Promise<OutlineNode>;
   /** 删除节点时级联删除整棵子树 */
   deleteOutlineNode(id: string): Promise<void>;
+  /**
+   * 在单个事务里「替换/追加」某节点下的一层子树。
+   * - replace：删除挂载点下现有子节点（及其子树），并解除受影响章节的大纲关联；
+   * - append：接在现有兄弟之后；anchorId 为 null 表示整本顶层追加（立项）。
+   * 事务内校验 anchor 存在且属于 novelId、计算 append 起始 order（消 TOCTOU）；
+   * nodes 为空时抛错（避免「采用后什么都没发生」）。
+   * 任何一步失败整体回滚，不留「删了旧节点、没建成新节点」的半棵树。
+   * 返回按前序展开的已创建节点（含子节点 id），便于调用方与 M3 使用。
+   *
+   * 注意：replace + anchorId=null 是**整本顶层替换**（删除全部根节点后按顶层重建），
+   * 走的是立项「重新生成大纲」；它是最容易留半棵树的路径，因此同样收在这个事务里。
+   */
+  commitOutlineSubtree(
+    novelId: string,
+    anchorId: string | null,
+    nodes: readonly OutlineTreeInputNode[],
+    mode: 'append' | 'replace',
+  ): Promise<OutlineNode[]>;
+  /**
+   * 批量写多个节点的 linkedEntryIds（关联确认面板用）。
+   * 单事务：避免「写一半刷新」留下半套关联；任何一个 id 不存在时整批失败并回滚。
+   * 只碰关联字段，不触碰标题/梗概/状态（与 updateOutlineNode 的分工是「批量原子 vs 单节点通用」）。
+   */
+  updateOutlineLinks(
+    updates: readonly { id: string; linkedEntryIds: readonly string[] }[],
+  ): Promise<void>;
   /** 批量写入同层排序，用于拖拽重排 */
   reorderOutline(updates: { id: string; parentId: string | null; order: number }[]): Promise<void>;
 

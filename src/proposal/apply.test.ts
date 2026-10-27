@@ -250,6 +250,175 @@ describe('其他实体', () => {
   });
 });
 
+describe('大纲树事务化（outlineTree）', () => {
+  function outlineTreeCreate(payload: { outlineText: string; parentId?: string | null }): Proposal {
+    return buildCreateProposal({
+      novelId: novel.id,
+      origin: 'generate',
+      target: 'outlineTree',
+      label: '全书大纲',
+      specs: fieldSpecsFor('outlineTree'),
+      payload,
+    });
+  }
+
+  it('create：按层级建树，挂在锚点下时接在既有子节点之后', async () => {
+    const volume = await repo.createOutlineNode(novel.id, { title: '第一卷' });
+    const existing = await repo.createOutlineNode(novel.id, {
+      title: '旧章',
+      parentId: volume.id,
+    });
+
+    await applyProposal(
+      repo,
+      outlineTreeCreate({
+        outlineText:
+          '# 第一卷 风起（约 30000 字）\n主角被追杀。\n## 第1章 雪夜（约 3000 字）\n追兵临门。',
+        parentId: volume.id,
+      }),
+    );
+
+    const children = (await repo.listOutline(novel.id))
+      .filter((node) => node.parentId === volume.id)
+      .sort((a, b) => a.order - b.order);
+    expect(children.map((node) => node.title)).toEqual(['旧章', '第一卷 风起']);
+    expect(children[1]).toMatchObject({ order: existing.order + 1, targetWords: 30000 });
+    const grandchild = (await repo.listOutline(novel.id)).find(
+      (node) => node.parentId === children[1]!.id,
+    );
+    expect(grandchild).toMatchObject({ title: '第1章 雪夜', targetWords: 3000, order: 0 });
+  });
+
+  it('create：不带 parentId 时追加到顶层末尾', async () => {
+    const first = await repo.createOutlineNode(novel.id, { title: '旧卷一' });
+
+    await applyProposal(repo, outlineTreeCreate({ outlineText: '# 新卷一\n## 第一章' }));
+
+    const nodes = await repo.listOutline(novel.id);
+    const roots = nodes.filter((node) => node.parentId === null).sort((a, b) => a.order - b.order);
+    expect(roots.map((node) => node.title)).toEqual(['旧卷一', '新卷一']);
+    expect(roots[0]!.id).toBe(first.id);
+    expect(roots[1]!.order).toBe(1);
+    expect(nodes.find((node) => node.parentId === roots[1]!.id)?.title).toBe('第一章');
+  });
+
+  it('replace：替换锚点下子层，解链章节但正文保留', async () => {
+    const anchor = await repo.createOutlineNode(novel.id, { title: '第一卷' });
+    const oldChild = await repo.createOutlineNode(novel.id, {
+      title: '旧章',
+      parentId: anchor.id,
+    });
+    const chapter = await repo.createChapter(novel.id, {
+      title: '旧章正文',
+      content: '正文不能丢',
+      outlineNodeId: oldChild.id,
+    });
+
+    await applyProposal(
+      repo,
+      buildReplaceProposal({
+        novelId: novel.id,
+        origin: 'generate',
+        target: 'outlineTree',
+        label: '细化 · 第一卷',
+        specs: fieldSpecsFor('outlineTree'),
+        targetId: anchor.id,
+        current: { outlineText: '# 旧章\n旧梗概' },
+        payload: { outlineText: '# 新章\n新梗概', parentId: anchor.id },
+      }),
+    );
+
+    const nodes = await repo.listOutline(novel.id);
+    expect(nodes.filter((node) => node.parentId === anchor.id).map((node) => node.title)).toEqual([
+      '新章',
+    ]);
+    expect(nodes.some((node) => node.id === oldChild.id)).toBe(false);
+    const kept = await repo.getChapter(chapter.id);
+    expect(kept?.content).toBe('正文不能丢');
+    expect(kept?.outlineNodeId).toBeNull();
+  });
+
+  it('replace：不带 parentId 是整本顶层替换（立项重新生成大纲）', async () => {
+    const oldRoot = await repo.createOutlineNode(novel.id, { title: '旧的第一卷' });
+    await repo.createOutlineNode(novel.id, { title: '旧的第一章', parentId: oldRoot.id });
+
+    await applyProposal(
+      repo,
+      buildReplaceProposal({
+        novelId: novel.id,
+        origin: 'generate',
+        target: 'outlineTree',
+        label: '全书大纲',
+        specs: fieldSpecsFor('outlineTree'),
+        targetId: novel.id,
+        current: { outlineText: '# 旧的第一卷\n## 旧的第一章' },
+        payload: { outlineText: '# 第一卷 风起\n## 第1章 雪夜' },
+      }),
+    );
+
+    const nodes = await repo.listOutline(novel.id);
+    expect(nodes.some((node) => node.id === oldRoot.id)).toBe(false);
+    // 旧根已清掉：新树是完整的一棵，不叠加在旧树上
+    expect(nodes).toHaveLength(2);
+    const root = nodes.find((node) => node.parentId === null);
+    expect(root).toMatchObject({ title: '第一卷 风起', order: 0 });
+    expect(nodes.find((node) => node.parentId === root!.id)?.title).toBe('第1章 雪夜');
+  });
+
+  it('挂载点已不存在时报错，什么都不写', async () => {
+    const other = await repo.createOutlineNode(novel.id, { title: '别的卷' });
+
+    await expect(
+      applyProposal(repo, outlineTreeCreate({ outlineText: '# 新章', parentId: 'ghost' })),
+    ).rejects.toThrow('已不存在');
+
+    expect((await repo.listOutline(novel.id)).map((node) => node.id)).toEqual([other.id]);
+  });
+
+  it('大纲内容没有标题行时拒绝落库', async () => {
+    await expect(
+      applyProposal(repo, outlineTreeCreate({ outlineText: '只有一段没有 # 标题的文字' })),
+    ).rejects.toThrow('大纲内容为空');
+    expect(await repo.listOutline(novel.id)).toHaveLength(0);
+  });
+
+  it('建树中途失败时整批回滚：旧子层与章节关联都保留', async () => {
+    const anchor = await repo.createOutlineNode(novel.id, { title: '第一卷' });
+    const oldChild = await repo.createOutlineNode(novel.id, {
+      title: '旧章',
+      parentId: anchor.id,
+    });
+    const chapter = await repo.createChapter(novel.id, {
+      title: '旧章正文',
+      outlineNodeId: oldChild.id,
+    });
+
+    // 标题超过节点 schema 的 200 字上限：第一棵子树写进去了也必须随事务回滚
+    await expect(
+      applyProposal(
+        repo,
+        buildReplaceProposal({
+          novelId: novel.id,
+          origin: 'generate',
+          target: 'outlineTree',
+          label: '细化 · 第一卷',
+          specs: fieldSpecsFor('outlineTree'),
+          targetId: anchor.id,
+          current: { outlineText: '# 旧章' },
+          payload: {
+            outlineText: '# 合法新章\n## 新节\n# ' + '长'.repeat(201),
+            parentId: anchor.id,
+          },
+        }),
+      ),
+    ).rejects.toThrow();
+
+    const nodes = await repo.listOutline(novel.id);
+    expect(nodes.map((node) => node.id).sort()).toEqual([anchor.id, oldChild.id].sort());
+    expect((await repo.getChapter(chapter.id))?.outlineNodeId).toBe(oldChild.id);
+  });
+});
+
 describe('外传进展摘要', () => {
   function sideStoryProposal(story: SideStory) {
     return buildReplaceProposal({

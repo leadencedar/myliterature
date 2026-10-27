@@ -1,4 +1,5 @@
 import { composeSections } from '@/prompt/sections';
+import { resolveChapterTargetWords, sceneRangeHint } from './chapterLength';
 
 /**
  * 整章正文生成的提示词。
@@ -38,12 +39,21 @@ export function buildChapterUserPrompt(params: {
 }): string {
   const lines = [params.volatileSuffix];
 
-  const requirements: string[] = [];
-  requirements.push(
-    params.targetWords
-      ? `本章篇幅约 ${params.targetWords} 字，可上下浮动 15%。`
-      : '本章篇幅约 3000 字，可上下浮动 15%。',
-  );
+  /**
+   * 目标字数只做结构承诺，不做字数遥控（D4：优先结构，再谈差额）。
+   * 旧文案「约 N 字，可上下浮动 15%」把模型推向两种失败：场次不够靠心理复述凑字数，
+   * 或者为了卡篇幅提前收尾。这里改成「先按梗概节拍分场，节拍撑不满就自然收束」。
+   */
+  const targetWords = resolveChapterTargetWords(params.targetWords);
+  const requirements: string[] = [
+    `本章目标约 ${targetWords} 字，场景数供参考：${sceneRangeHint(targetWords)}。`,
+    '以【本章要写的内容】的梗概节拍为准：每个节拍落到目标—阻碍—转折；',
+    '节拍不足时把一场写深，不要用心理复述、景物堆砌凑字数；',
+    '节拍撑不满目标时写到场景自然收束即可。',
+    '按时空或视点转移换场，不要按段落切场。',
+    '结尾收在梗概承诺的钩子上，不要用总结收尾。',
+    '若文体篇幅建议（如网文单章 2000–3000 字）与本节目标冲突，以本节目标为准。',
+  ];
   if (params.instruction?.trim()) {
     requirements.push(`用户额外要求：${params.instruction.trim()}`);
   }

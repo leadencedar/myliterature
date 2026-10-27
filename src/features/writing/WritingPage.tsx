@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { RequireNovel } from '@/app/RequireNovel';
 import { useRepository } from '@/data/RepositoryProvider';
 import { useInvalidate, useRepoQuery } from '@/data/useRepoQuery';
-import type { Novel, OutlineNode, SideStory } from '@/domain/schema';
+import type { Chapter, ChapterSummary, Novel, OutlineNode, SideStory } from '@/domain/schema';
 import { chaptersOfTrack, sideStoryLabel } from '@/domain/sideStory';
 import { Button, IconButton } from '@/ui/Button';
 import { EmptyState, Page, Section } from '@/ui/Page';
@@ -19,6 +19,27 @@ import { ScenarioEntryCard } from '../scenario/ScenarioEntryCard';
 import { ChapterEditorScreen } from './ChapterEditorScreen';
 import { ChapterListItem } from './ChapterListItem';
 import { SideStorySheet } from './SideStorySheet';
+
+/**
+ * 主线最新一份摘要的累计伏笔。
+ *
+ * 摘要里的 openThreads 本身就是「截至该章仍未收束」的累计值（见 chapterSummary.ts），
+ * 所以只需要取主线章节 index 最大的那一份，不用做全书集合运算。
+ */
+function latestMainlineOpenThreads(chapters: Chapter[], summaries: ChapterSummary[]): string[] {
+  const byChapterId = new Map(
+    chaptersOfTrack(chapters, null).map((chapter) => [chapter.id, chapter] as const),
+  );
+  let latest: { index: number; openThreads: string[] } | undefined;
+  for (const summary of summaries) {
+    const chapter = byChapterId.get(summary.chapterId);
+    if (!chapter) continue;
+    if (!latest || chapter.index > latest.index) {
+      latest = { index: chapter.index, openThreads: summary.openThreads };
+    }
+  }
+  return latest?.openThreads ?? [];
+}
 
 export function WritingPage() {
   return <RequireNovel title="写作">{(novel) => <WritingContent novel={novel} />}</RequireNovel>;
@@ -375,6 +396,9 @@ function WritingContent({ novel }: { novel: Novel }) {
           entries={data.entries}
           categories={data.categories}
           depth={selected?.depth ?? 0}
+          chapters={chapters}
+          openThreads={latestMainlineOpenThreads(chapters, data.summaries)}
+          rollingSummary={novel.rollingSummary}
           onWrite={openChapterForNode}
           onClose={() => setSelected(null)}
         />

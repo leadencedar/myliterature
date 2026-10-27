@@ -9,11 +9,13 @@ import { formatTokens } from '@/context/tokens';
 import { countWords } from '@/domain/primitives';
 import { normsInScope } from '@/domain/writingNorm';
 import { LlmError } from '@/llm/errors';
+import type { ChatResult } from '@/llm/types';
 import { useLlm } from '@/llm/useLlm';
 import { Button } from '@/ui/Button';
 import { SegmentedControl, Toggle } from '@/ui/Controls';
 import { TextAreaField } from '@/ui/Field';
-import { Sheet } from '@/ui/Sheet';
+import { ConfirmDialog, Sheet } from '@/ui/Sheet';
+import { chapterMaxOutputTokens, resolveChapterTargetWords } from './chapterLength';
 import { buildChapterSystemPrompt, buildChapterUserPrompt } from './chapterDraft';
 import { NormInjectionPicker } from './NormInjectionPicker';
 
@@ -27,8 +29,18 @@ const SUMMARY_COUNT_OPTIONS = ['0', '2', '3', '5'].map((value) => ({
 type Phase =
   | { kind: 'form' }
   | { kind: 'streaming'; text: string }
-  | { kind: 'done'; text: string }
+  /** incomplete：生成没有完整结束（撞上限被截断 / 用户中止），采用前要二次确认 */
+  | { kind: 'done'; text: string; incomplete?: 'truncated' | 'aborted' }
   | { kind: 'error'; message: string; detail?: string };
+
+/** 服务端明确拒绝 max_tokens 参数时才允许去掉它重试，别把别的 400 也吞成静默重试 */
+function isMaxTokensRejected(cause: unknown): boolean {
+  return (
+    cause instanceof LlmError &&
+    cause.kind === 'bad-request' &&
+    (cause.detail ?? '').includes('max_tokens')
+  );
+}
 
 interface GenerateChapterSheetProps {
   open: boolean;
@@ -69,6 +81,8 @@ export function GenerateChapterSheet({
   const [includeMainProgress, setIncludeMainProgress] = useState(false);
   /** 本次临时不注入的写作规范；只影响这一次生成，不写库 */
   const [excludedNormIds, setExcludedNormIds] = useState<string[]>([]);
+  /** 待确认采用的不完整结果：选中要采用的模式，确认后才真正写入章节 */
+  const [pendingAccept, setPendingAccept] = useState<'replace' | 'append' | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   // 面板常驻挂载，其他状态（勾选、摘要章数）跨次保留是现有行为，不动它们；
@@ -97,6 +111,17 @@ export function GenerateChapterSheet({
   const targetChapter = context.chapters.find((chapter) => chapter.id === context.targetChapterId);
   const showMainProgressToggle =
     (targetChapter?.sideStoryId ?? null) !== null && context.novel.rollingSummary.trim() !== '';
+
+  /**
+   * 目标字数（D4）：大纲节点有值就以它为准，为空/非法回退 3000。
+   * 来源要显式告诉作者 —— 否则「为什么这次只写了 3000 字」会变成一个要猜的谜。
+   */
+  const targetNode = useMemo(
+    () => context.outline.find((node) => node.id === context.targetNodeId),
+    [context.outline, context.targetNodeId],
+  );
+  const targetWords = resolveChapterTargetWords(targetNode?.targetWords ?? null);
+  const targetWordsSource = targetNode?.targetWords != null ? '大纲节点' : '默认 3000';
 
   const effectiveSelection = selectedIds ?? preview.defaultEntryIds;
 
@@ -132,7 +157,6 @@ export function GenerateChapterSheet({
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-    setPhase({ kind: 'streaming', text: '' });
 
     const built = builder.build({
       ...context,
@@ -141,19 +165,24 @@ export function GenerateChapterSheet({
       includeMainProgress,
       excludedNormIds,
     });
-    const targetNode = context.outline.find((node) => node.id === context.targetNodeId);
+    const system = buildChapterSystemPrompt(built.stablePrefix);
+    const user = buildChapterUserPrompt({
+      volatileSuffix: built.volatileSuffix,
+      targetWords: targetNode?.targetWords ?? null,
+      ...(instruction ? { instruction } : {}),
+    });
 
     let streamed = '';
-    try {
-      const result = await llm.runStream(
+    /** 每次尝试都从零累计流式文本：400 重试时不能把上一轮的片段算两遍 */
+    const startStream = (withMaxTokens: boolean) => {
+      streamed = '';
+      setPhase({ kind: 'streaming', text: '' });
+      return llm.runStream(
         'chapter-draft',
         {
-          system: buildChapterSystemPrompt(built.stablePrefix),
-          user: buildChapterUserPrompt({
-            volatileSuffix: built.volatileSuffix,
-            targetWords: targetNode?.targetWords ?? null,
-            ...(instruction ? { instruction } : {}),
-          }),
+          system,
+          user,
+          ...(withMaxTokens ? { maxTokens: chapterMaxOutputTokens(targetWords) } : {}),
           signal: controller.signal,
         },
         {
@@ -163,11 +192,31 @@ export function GenerateChapterSheet({
           },
         },
       );
-      setPhase({ kind: 'done', text: result.content || streamed });
+    };
+
+    try {
+      let result: ChatResult;
+      try {
+        result = await startStream(true);
+      } catch (cause) {
+        // 部分服务商/自建端点不接受 max_tokens（400 且报错里点名它）：去掉该参数重试一次。
+        // 其余错误照常展示，不静默重试 —— 会被重试掩盖的失败更难排查
+        if (!isMaxTokensRejected(cause)) throw cause;
+        result = await startStream(false);
+      }
+      // finishReason 为 null 表示服务商没回传：视为未知，不判截断、不报错
+      const incomplete = result.finishReason === 'length' ? 'truncated' : undefined;
+      setPhase({
+        kind: 'done',
+        text: result.content || streamed,
+        ...(incomplete ? { incomplete } : {}),
+      });
     } catch (cause) {
       if (cause instanceof LlmError && cause.kind === 'aborted') {
-        // 已经流出来的内容留着，用户可能仍想用
-        setPhase(streamed ? { kind: 'done', text: streamed } : { kind: 'form' });
+        // 已经流出来的内容留着，用户可能仍想用；但必须标记「未完成」而不是当作生成成功
+        setPhase(
+          streamed ? { kind: 'done', text: streamed, incomplete: 'aborted' } : { kind: 'form' },
+        );
         return;
       }
       const error = cause instanceof LlmError ? cause : undefined;
@@ -179,189 +228,245 @@ export function GenerateChapterSheet({
     }
   }
 
-  async function accept(mode: 'replace' | 'append') {
+  /** 真正写入章节；直接采用与「仍要采用不完整内容」两条路径复用 */
+  async function commitAccept(mode: 'replace' | 'append') {
     if (phase.kind !== 'done') return;
     await onAccept(phase.text, mode);
+    setPendingAccept(null);
     setPhase({ kind: 'form' });
     onClose();
+  }
+
+  async function accept(mode: 'replace' | 'append') {
+    if (phase.kind !== 'done') return;
+    // 截断与中断都意味着内容不完整：直接采用会把半章当定稿，破坏「完成」的语义
+    if (phase.incomplete) {
+      setPendingAccept(mode);
+      return;
+    }
+    await commitAccept(mode);
   }
 
   const generatedText = phase.kind === 'streaming' || phase.kind === 'done' ? phase.text : '';
 
   return (
-    <Sheet
-      open={open}
-      title="生成本章正文"
-      description="先看清这次依据了哪些内容，再决定是否生成。"
-      onClose={onClose}
-    >
-      {phase.kind === 'form' || phase.kind === 'error' ? (
-        <>
-          <div className="flex flex-col gap-2 rounded-xl bg-paper-sunken p-3">
-            <div className="flex items-baseline justify-between">
-              <p className="text-sm font-medium text-ink-700">本次注入</p>
-              <p className="text-xs text-ink-500">
-                {preview.items.filter((item) => item.included).length} 项 ·{' '}
-                {formatTokens(preview.estimatedTokens)}
-              </p>
+    <>
+      <Sheet
+        open={open}
+        title="生成本章正文"
+        description="先看清这次依据了哪些内容，再决定是否生成。"
+        onClose={onClose}
+      >
+        {phase.kind === 'form' || phase.kind === 'error' ? (
+          <>
+            <div className="flex flex-col gap-2 rounded-xl bg-paper-sunken p-3">
+              <div className="flex items-baseline justify-between">
+                <p className="text-sm font-medium text-ink-700">本次注入</p>
+                <p className="text-xs text-ink-500">
+                  {preview.items.filter((item) => item.included).length} 项 ·{' '}
+                  {formatTokens(preview.estimatedTokens)}
+                </p>
+              </div>
+              <ul className="flex flex-col gap-1">
+                {preview.items
+                  .filter((item) => item.included)
+                  .map((item) => (
+                    <li
+                      key={`${item.kind}-${item.id}`}
+                      className="flex items-baseline justify-between gap-2 text-xs"
+                    >
+                      <span className="min-w-0 truncate text-ink-700">{item.label}</span>
+                      <span className="shrink-0 text-ink-300">{item.tokens}</span>
+                    </li>
+                  ))}
+              </ul>
+              {droppedItems.length > 0 ? (
+                <p className="text-xs text-seal">
+                  {droppedItems.length} 项因超出预算未注入：
+                  {droppedItems.map((item) => item.label).join('、')}
+                </p>
+              ) : null}
             </div>
-            <ul className="flex flex-col gap-1">
-              {preview.items
-                .filter((item) => item.included)
-                .map((item) => (
-                  <li
-                    key={`${item.kind}-${item.id}`}
-                    className="flex items-baseline justify-between gap-2 text-xs"
-                  >
-                    <span className="min-w-0 truncate text-ink-700">{item.label}</span>
-                    <span className="shrink-0 text-ink-300">{item.tokens}</span>
-                  </li>
-                ))}
-            </ul>
-            {droppedItems.length > 0 ? (
-              <p className="text-xs text-seal">
-                {droppedItems.length} 项因超出预算未注入：
-                {droppedItems.map((item) => item.label).join('、')}
-              </p>
-            ) : null}
-          </div>
 
-          <NormInjectionPicker
-            norms={writingNorms}
-            excludedIds={excludedNormIds}
-            onToggle={toggleNorm}
-          />
-
-          {pinnedItems.length > 0 ? (
-            <p className="text-xs leading-relaxed text-ink-500">
-              核心设定（{pinnedItems.length}{' '}
-              条）始终注入，不能取消。要调整请到知识库改「核心设定」标记。
-            </p>
-          ) : null}
-
-          {selectableEntries.length > 0 ? (
-            <div className="flex flex-col gap-2">
+            {/* D4：目标字数与来源必须可见，否则「这一章为什么是这个长度」只能靠猜 */}
+            <div className="flex flex-col gap-1 rounded-xl bg-paper-sunken p-3">
               <p className="text-sm font-medium text-ink-700">
-                参与写作的设定（已选 {effectiveSelection.length} 项）
+                目标字数：{targetWords} 字（来源：{targetWordsSource}）
               </p>
               <p className="text-xs leading-relaxed text-ink-500">
-                {selectedIds === null
-                  ? '已按大纲梗概与上一章摘要自动勾上相关条目，点标签可以增减。'
-                  : '已手动调整过。'}
+                场景数参考按这个目标推算；要修改请到「写作 → 大纲节点」里改。
               </p>
-              <div className="flex flex-wrap gap-2">
-                {selectableEntries.map((entry) => {
-                  const active = effectiveSelection.includes(entry.id);
-                  return (
-                    <button
-                      key={entry.id}
-                      type="button"
-                      aria-pressed={active}
-                      onClick={() => toggleEntry(entry.id)}
-                      className={[
-                        'rounded-full border px-3 py-1.5 text-xs transition-colors',
-                        active
-                          ? 'border-ink-900 bg-ink-900 text-paper'
-                          : 'border-ink-100 bg-paper-raised text-ink-700',
-                      ].join(' ')}
-                    >
-                      {entry.title}
-                    </button>
-                  );
-                })}
+            </div>
+
+            <NormInjectionPicker
+              norms={writingNorms}
+              excludedIds={excludedNormIds}
+              onToggle={toggleNorm}
+            />
+
+            {pinnedItems.length > 0 ? (
+              <p className="text-xs leading-relaxed text-ink-500">
+                核心设定（{pinnedItems.length}{' '}
+                条）始终注入，不能取消。要调整请到知识库改「核心设定」标记。
+              </p>
+            ) : null}
+
+            {selectableEntries.length > 0 ? (
+              <div className="flex flex-col gap-2">
+                <p className="text-sm font-medium text-ink-700">
+                  参与写作的设定（已选 {effectiveSelection.length} 项）
+                </p>
+                <p className="text-xs leading-relaxed text-ink-500">
+                  {selectedIds === null
+                    ? '已按大纲梗概与上一章摘要自动勾上相关条目，点标签可以增减。'
+                    : '已手动调整过。'}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {selectableEntries.map((entry) => {
+                    const active = effectiveSelection.includes(entry.id);
+                    return (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => toggleEntry(entry.id)}
+                        className={[
+                          'rounded-full border px-3 py-1.5 text-xs transition-colors',
+                          active
+                            ? 'border-ink-900 bg-ink-900 text-paper'
+                            : 'border-ink-100 bg-paper-raised text-ink-700',
+                        ].join(' ')}
+                      >
+                        {entry.title}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ) : null}
+            ) : null}
 
-          <SegmentedControl
-            label="带上前几章摘要"
-            value={summaryCount}
-            options={SUMMARY_COUNT_OPTIONS}
-            onChange={setSummaryCount}
-          />
-
-          {showMainProgressToggle ? (
-            <Toggle
-              label="参考主线进展"
-              description="外传发生在主线之后、需要知道主线走到哪时再打开。前传打开它，人物容易提前知道后来的事。"
-              checked={includeMainProgress}
-              onChange={setIncludeMainProgress}
+            <SegmentedControl
+              label="带上前几章摘要"
+              value={summaryCount}
+              options={SUMMARY_COUNT_OPTIONS}
+              onChange={setSummaryCount}
             />
-          ) : null}
 
-          <TextAreaField
-            label="本章额外要求（可选）"
-            rows={2}
-            value={instruction}
-            placeholder="例如：多写对话；结尾停在敲门声上。"
-            onChange={(event) => setInstruction(event.target.value)}
-          />
+            {showMainProgressToggle ? (
+              <Toggle
+                label="参考主线进展"
+                description="外传发生在主线之后、需要知道主线走到哪时再打开。前传打开它，人物容易提前知道后来的事。"
+                checked={includeMainProgress}
+                onChange={setIncludeMainProgress}
+              />
+            ) : null}
 
-          <Button variant="primary" size="lg" block disabled={!llm.configured} onClick={generate}>
-            开始生成
-          </Button>
-
-          {!llm.configured ? (
-            <p className="text-xs text-ink-500">需要先在「设置」里配置模型。</p>
-          ) : null}
-
-          {phase.kind === 'error' ? (
-            <div role="alert" className="rounded-xl bg-seal-soft px-3 py-2.5">
-              <p className="text-sm text-seal">{phase.message}</p>
-              {phase.detail ? (
-                <p className="mt-1 break-words text-xs text-ink-500">{phase.detail}</p>
-              ) : null}
-            </div>
-          ) : null}
-        </>
-      ) : null}
-
-      {phase.kind === 'streaming' || phase.kind === 'done' ? (
-        <>
-          <div className="flex items-baseline justify-between">
-            <p className="text-sm font-medium text-ink-700">
-              {phase.kind === 'streaming' ? '正在写…' : '生成完成'}
-            </p>
-            <p className="text-xs text-ink-500">{countWords(generatedText)} 字</p>
-          </div>
-
-          {phase.kind === 'streaming' ? (
-            <p
-              aria-live="polite"
-              className="max-h-[40dvh] overflow-y-auto rounded-xl bg-paper-sunken px-3 py-2.5 font-reading text-sm leading-relaxed whitespace-pre-wrap text-ink-900"
-            >
-              {generatedText || '…'}
-            </p>
-          ) : (
             <TextAreaField
-              label="生成结果（可直接修改）"
-              rows={14}
-              value={generatedText}
-              onChange={(event) => setPhase({ kind: 'done', text: event.target.value })}
+              label="本章额外要求（可选）"
+              rows={2}
+              value={instruction}
+              placeholder="例如：多写对话；结尾停在敲门声上。"
+              onChange={(event) => setInstruction(event.target.value)}
             />
-          )}
 
-          {phase.kind === 'streaming' ? (
-            <Button variant="secondary" size="lg" block onClick={() => abortRef.current?.abort()}>
-              停止生成
+            <Button variant="primary" size="lg" block disabled={!llm.configured} onClick={generate}>
+              开始生成
             </Button>
-          ) : (
-            <div className="flex flex-col gap-2">
-              <Button variant="primary" size="lg" block onClick={() => accept('replace')}>
-                {existingContent.trim() ? '替换正文' : '采用为正文'}
-              </Button>
-              {existingContent.trim() ? (
-                <Button variant="secondary" size="lg" block onClick={() => accept('append')}>
-                  追加到正文末尾
-                </Button>
-              ) : null}
-              <Button variant="ghost" size="md" block onClick={() => setPhase({ kind: 'form' })}>
-                放弃，重新设置
-              </Button>
+
+            {!llm.configured ? (
+              <p className="text-xs text-ink-500">需要先在「设置」里配置模型。</p>
+            ) : null}
+
+            {phase.kind === 'error' ? (
+              <div role="alert" className="rounded-xl bg-seal-soft px-3 py-2.5">
+                <p className="text-sm text-seal">{phase.message}</p>
+                {phase.detail ? (
+                  <p className="mt-1 break-words text-xs text-ink-500">{phase.detail}</p>
+                ) : null}
+              </div>
+            ) : null}
+          </>
+        ) : null}
+
+        {phase.kind === 'streaming' || phase.kind === 'done' ? (
+          <>
+            <div className="flex items-baseline justify-between">
+              <p className="text-sm font-medium text-ink-700">
+                {phase.kind === 'streaming'
+                  ? '正在写…'
+                  : phase.incomplete
+                    ? '生成未完成'
+                    : '生成完成'}
+              </p>
+              <p className="text-xs text-ink-500">{countWords(generatedText)} 字</p>
             </div>
-          )}
-        </>
-      ) : null}
-    </Sheet>
+
+            {/* 截断/中断必须在结果区顶部就说清楚：内容看得见，但它不是完整的一章 */}
+            {phase.kind === 'done' && phase.incomplete ? (
+              <div role="alert" className="rounded-xl bg-seal-soft px-3 py-2.5">
+                <p className="text-sm text-seal">
+                  {phase.incomplete === 'truncated'
+                    ? '生成被截断，内容不完整。建议重新生成；采用只会保存已生成的部分。'
+                    : '生成已中断，内容不完整。'}
+                </p>
+              </div>
+            ) : null}
+
+            {phase.kind === 'streaming' ? (
+              <p
+                aria-live="polite"
+                className="max-h-[40dvh] overflow-y-auto rounded-xl bg-paper-sunken px-3 py-2.5 font-reading text-sm leading-relaxed whitespace-pre-wrap text-ink-900"
+              >
+                {generatedText || '…'}
+              </p>
+            ) : (
+              <TextAreaField
+                label="生成结果（可直接修改）"
+                rows={14}
+                value={generatedText}
+                onChange={(event) =>
+                  // 改字不改变「不完整」的事实：截断的草稿改两笔仍缺后半章，采用前照旧要确认
+                  setPhase((current) =>
+                    current.kind === 'done' ? { ...current, text: event.target.value } : current,
+                  )
+                }
+              />
+            )}
+
+            {phase.kind === 'streaming' ? (
+              <Button variant="secondary" size="lg" block onClick={() => abortRef.current?.abort()}>
+                停止生成
+              </Button>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <Button variant="primary" size="lg" block onClick={() => accept('replace')}>
+                  {existingContent.trim() ? '替换正文' : '采用为正文'}
+                </Button>
+                {existingContent.trim() ? (
+                  <Button variant="secondary" size="lg" block onClick={() => accept('append')}>
+                    追加到正文末尾
+                  </Button>
+                ) : null}
+                <Button variant="ghost" size="md" block onClick={() => setPhase({ kind: 'form' })}>
+                  放弃，重新设置
+                </Button>
+              </div>
+            )}
+          </>
+        ) : null}
+      </Sheet>
+
+      {/* 两种「不完整」都要二次确认：截断与主动中断都意味着这还不是定稿 */}
+      <ConfirmDialog
+        open={pendingAccept !== null}
+        title="仍要采用不完整内容？"
+        message="这次生成没有完整结束，采用后只会保存已生成的部分。建议回到生成结果继续补写，或重新生成。"
+        confirmLabel="仍要采用"
+        onConfirm={() => {
+          if (pendingAccept) void commitAccept(pendingAccept);
+        }}
+        onCancel={() => setPendingAccept(null)}
+      />
+    </>
   );
 }

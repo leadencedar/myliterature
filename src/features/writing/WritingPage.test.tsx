@@ -393,7 +393,9 @@ describe('AI 细化为子节点', () => {
     expect(userMessage).toContain('要拆分的节点：第2章 旧识');
     // 同层的兄弟要给出来划定边界
     expect(userMessage).toContain('第1章 雪夜');
-    expect(userMessage).toContain('林越：失忆剑客');
+    // M1 起规划侧用完整字段渲染相关设定（renderEntry），不再降级为「标题：摘要」
+    expect(userMessage).toContain('## 林越（人物）');
+    expect(userMessage).toContain('失忆剑客');
     // 细化是结构化推理任务
     expect(body.thinking).toEqual({ type: 'enabled' });
     expect(body.model).toBe('deepseek-v4-pro');
@@ -406,6 +408,8 @@ describe('AI 细化为子节点', () => {
     const user = await openNode('第一卷 风起');
 
     await user.click(screen.getByRole('button', { name: '细化这一节点' }));
+    // S4：有子节点时 replace 细化先告知影响，确认后才发请求
+    await user.click(await screen.findByRole('button', { name: '继续细化' }));
     await screen.findByRole('button', { name: /采用这份细目/u });
 
     // 唯一一条提案默认已展开，只有折叠时才需要点开
@@ -425,6 +429,7 @@ describe('AI 细化为子节点', () => {
     const user = await openNode('第一卷 风起');
 
     await user.click(screen.getByRole('button', { name: '细化这一节点' }));
+    await user.click(await screen.findByRole('button', { name: '继续细化' }));
     await user.click(await screen.findByRole('button', { name: /采用这份细目/u }));
 
     await waitFor(async () => {
