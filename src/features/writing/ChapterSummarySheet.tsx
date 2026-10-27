@@ -17,6 +17,7 @@ import { fieldSpecsFor } from '@/proposal/fields';
 import { Button } from '@/ui/Button';
 import { Sheet } from '@/ui/Sheet';
 import { ProposalInbox } from '../proposals/ProposalInbox';
+import { supersedePendingChapterSummary } from './archiveChapter';
 import {
   ChapterSummaryResultSchema,
   buildSummarySystemPrompt,
@@ -25,6 +26,14 @@ import {
   previousSummaryOf,
   resolveEntryNames,
 } from './chapterSummary';
+
+/** 提案 payload 是 unknown，读 chapterId 前先收窄 */
+function summaryProposalChapterId(proposal: Proposal): string | undefined {
+  const payload = proposal.payload;
+  if (payload === null || typeof payload !== 'object') return undefined;
+  const chapterId = (payload as { chapterId?: unknown }).chapterId;
+  return typeof chapterId === 'string' ? chapterId : undefined;
+}
 
 type Phase =
   | { kind: 'idle' }
@@ -75,6 +84,30 @@ export function ChapterSummarySheet({
   const llm = useLlm();
 
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
+  /** 本章是否已有待确认的摘要提案（来自自动归档或上一次手动提炼） */
+  const [pendingArchive, setPendingArchive] = useState(false);
+
+  // 打开时只读查询：用来提示「本章档案待确认」，不重跑、不写库
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const pending = await repository.listProposals(novel.id, { status: 'pending' });
+        const owned = pending.some(
+          (proposal) =>
+            proposal.target === 'chapterSummary' &&
+            summaryProposalChapterId(proposal) === chapter.id,
+        );
+        if (!cancelled) setPendingArchive(owned);
+      } catch {
+        // 只是提示信息，查询失败不影响手动提炼
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, repository, novel.id, chapter.id]);
 
   const existing = summaries.find((item) => item.chapterId === chapter.id);
   const previous = previousSummaryOf(chapters, summaries, chapter.id);
@@ -195,6 +228,9 @@ export function ChapterSummarySheet({
             }),
       ];
 
+      // design §6.7：自动归档可能刚留下本章 pending 摘要。不先清掉，
+      // 收件箱里会出现同一章的两份摘要，作者不知道该看哪份
+      await supersedePendingChapterSummary(repository, data.novel.id, data.chapter.id);
       await repository.createProposals(proposals);
       invalidate();
 
@@ -231,6 +267,11 @@ export function ChapterSummarySheet({
     >
       {phase.kind === 'idle' || phase.kind === 'error' ? (
         <>
+          {pendingArchive ? (
+            <p className="text-xs leading-relaxed text-accent">
+              本章档案待确认：重新提炼会替换掉待确认的摘要提案。
+            </p>
+          ) : null}
           {existing ? (
             <div className="rounded-xl bg-paper-sunken px-3 py-2.5">
               <p className="mb-1 text-xs font-medium text-ink-700">已有摘要</p>

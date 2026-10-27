@@ -5,8 +5,10 @@ import { isLlmConfigured, useLlmSettings } from '@/llm/settingsStore';
 import { TASK_PROFILES, type TaskKind } from '@/llm/taskProfiles';
 import { resolveModel, useLlm } from '@/llm/useLlm';
 import { Button } from '@/ui/Button';
+import { Toggle } from '@/ui/Controls';
 import { SelectField, TextField } from '@/ui/Field';
 import { Page, Section, SectionGrid } from '@/ui/Page';
+import { useArchiveSettings } from '../writing/archiveSettings';
 import { BackupSection } from '../export/BackupSection';
 
 type TestState =
@@ -30,6 +32,7 @@ export function SettingsPage() {
   const settings = useLlmSettings();
   const llm = useLlm();
   const [showKey, setShowKey] = useState(false);
+  const archive = useArchiveSettings();
   const [test, setTest] = useState<TestState>({ phase: 'idle' });
   const abortRef = useRef<AbortController | null>(null);
 
@@ -163,6 +166,28 @@ export function SettingsPage() {
           hint="立项与大纲决定整本书的地基，会优先用这个模型。留空则与常规模型相同。"
           onChange={(event) => settings.update({ strongModel: event.target.value })}
         />
+      </Section>
+
+      <Section
+        title="写作辅助"
+        description="与章节完成相关的自动化设置。AI 产出仍然一律先变成待确认提案，不会自动写入。"
+      >
+        <Toggle
+          label="完成后自动生成本章档案"
+          description="标记章节「已完成」时在后台生成摘要、进展与知识库条目提案（摘要与知识库更新，可关条目），不弹窗、不阻塞写作；在编辑器状态行点「查看」确认。"
+          checked={archive.autoArchive}
+          onChange={(value) => archive.update({ autoArchive: value })}
+        />
+        <Toggle
+          label="归档时提取知识库条目"
+          description="关闭后只生成摘要与进展，不再产出条目提案；调用次数不变。"
+          checked={archive.extractEntries}
+          onChange={(value) => archive.update({ extractEntries: value })}
+        />
+        <p className="text-xs leading-relaxed text-ink-500">
+          成本：每章归档 1 次结构化调用（输入本章正文，输出摘要、进展与条目）。
+          摘要与进展是摘要链的来源，必须生成；条目提取可以关闭。
+        </p>
       </Section>
 
       <Section title="连通性测试" description="发一条极短的请求验证配置，费用可忽略。">

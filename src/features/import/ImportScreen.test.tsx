@@ -1751,6 +1751,9 @@ describe('作为世界观设定导入', () => {
     await waitFor(async () => {
       const entries = await harness.repository.listEntries(novel.id);
       expect(entries.map((entry) => entry.title).sort()).toEqual(['灵潮', '裴照'].sort());
+      // 新建与合并提案是逐条落库的：标题齐了不代表合并后的字段已经写进去，
+      // 默认并行全量时紧接着断言会偶发读到旧值「船夫」
+      expect(entries.find((entry) => entry.title === '裴照')?.fields.identity).toBe('渡口船夫');
     });
     const entries = await harness.repository.listEntries(novel.id);
     expect(entries.every((entry) => entry.sourceChapterIds.length === 0)).toBe(true);

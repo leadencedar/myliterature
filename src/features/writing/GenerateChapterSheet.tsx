@@ -42,6 +42,25 @@ function isMaxTokensRejected(cause: unknown): boolean {
   );
 }
 
+/** 低于目标 85% 视为「没写够」：与 D4 的差额口径一致，但只提示、不制造写满的压力 */
+const SHORTFALL_RATIO = 0.85;
+
+/**
+ * 续写指令。
+ * 只补尚未落地的场景、不重复、不总结 —— 补写是补场景，不是把字数凑满（D4）。
+ */
+function continueInstruction(remaining: number): string {
+  return `接着上面的内容继续写，只补本章尚未落地的场景；还差约 ${remaining} 字。不要重复已经写过的内容，不要总结。`;
+}
+
+/** 续写结果追加到当前文本：空行分隔，避免两段正文粘成一句 */
+function appendGenerated(base: string, addition: string): string {
+  const head = base.trimEnd();
+  const tail = addition.trim();
+  if (!tail) return head;
+  return head ? `${head}\n\n${tail}` : tail;
+}
+
 interface GenerateChapterSheetProps {
   open: boolean;
   /** 构建上下文所需的全部数据 */
@@ -93,6 +112,14 @@ export function GenerateChapterSheet({
   /** 待确认采用的不完整结果：选中要采用的模式，确认后才真正写入章节 */
   const [pendingAccept, setPendingAccept] = useState<'replace' | 'append' | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /**
+   * 本次生成的 system/user。续写要把「原 user 提示词 + 当前正文」作为 history 发回去，
+   * 模型才知道这一章原本要写什么；只存 ref，不需要触发重渲染。
+   */
+  const lastRunRef = useRef<{ system: string; user: string } | null>(null);
+
+  /** 继续补写时的基准正文：流式回调要按「已有正文 + 新片段」拼出完整预览 */
+  const continueBaseRef = useRef('');
 
   // 面板常驻挂载，其他状态（勾选、摘要章数）跨次保留是现有行为，不动它们；
   // 只有临时取消的规范在每次「关 → 开」时恢复为全部带上 —— 取消的语义就是「只这一次」，
@@ -180,6 +207,7 @@ export function GenerateChapterSheet({
       targetWords: targetNode?.targetWords ?? null,
       ...(instruction ? { instruction } : {}),
     });
+    lastRunRef.current = { system, user };
 
     let streamed = '';
     /** 每次尝试都从零累计流式文本：400 重试时不能把上一轮的片段算两遍 */
@@ -237,6 +265,80 @@ export function GenerateChapterSheet({
     }
   }
 
+  /**
+   * 手动「继续补写」：只补未落地场景，不自动触发、不循环到目标。
+   *
+   * 请求带 history = [原始 user 提示词, 当前正文]，再给一条续写指令与按剩余字数
+   * 推导的 maxTokens；流式结果**追加**到当前正文后重新评估差额。
+   * 截断/中止的续写同样标记 incomplete，保持「未完成」语义不丢。
+   */
+  async function continueWriting() {
+    if (phase.kind !== 'done') return;
+    const run = lastRunRef.current;
+    if (!run) return;
+    const base = phase.text;
+    const remaining = Math.max(0, targetWords - countWords(base));
+    const previousIncomplete = phase.incomplete;
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    continueBaseRef.current = base;
+
+    let streamed = '';
+    setPhase({ kind: 'streaming', text: base });
+
+    try {
+      const result = await llm.runStream(
+        'chapter-draft',
+        {
+          system: run.system,
+          history: [
+            { role: 'user', content: run.user },
+            { role: 'assistant', content: base },
+          ],
+          user: continueInstruction(remaining),
+          // 剩余字数不多时也要留出正常单次输出的余量；夹取规则与首次生成一致
+          maxTokens: chapterMaxOutputTokens(remaining > 0 ? remaining : targetWords),
+          signal: controller.signal,
+        },
+        {
+          onText: (delta) => {
+            streamed += delta;
+            setPhase({
+              kind: 'streaming',
+              text: appendGenerated(continueBaseRef.current, streamed),
+            });
+          },
+        },
+      );
+      const next = appendGenerated(base, result.content || streamed);
+      // 续写被截断仍算未完成：作者要能继续补，而不是被当成完整的一章
+      const incomplete = result.finishReason === 'length' ? 'truncated' : undefined;
+      setPhase({ kind: 'done', text: next, ...(incomplete ? { incomplete } : {}) });
+    } catch (cause) {
+      if (cause instanceof LlmError && cause.kind === 'aborted') {
+        // 中止时保留已经补出来的部分；一个字都没补出来就退回原来的结果，别让作者丢正文
+        setPhase(
+          streamed
+            ? { kind: 'done', text: appendGenerated(base, streamed), incomplete: 'aborted' }
+            : {
+                kind: 'done',
+                text: base,
+                ...(previousIncomplete ? { incomplete: previousIncomplete } : {}),
+              },
+        );
+        return;
+      }
+      const error = cause instanceof LlmError ? cause : undefined;
+      setPhase({
+        kind: 'error',
+        message: error?.message ?? (cause instanceof Error ? cause.message : '补写失败'),
+        ...(error?.detail ? { detail: error.detail } : {}),
+      });
+    }
+  }
+
   /** 真正写入章节；直接采用与「仍要采用不完整内容」两条路径复用 */
   async function commitAccept(mode: 'replace' | 'append') {
     if (phase.kind !== 'done') return;
@@ -259,6 +361,16 @@ export function GenerateChapterSheet({
   }
 
   const generatedText = phase.kind === 'streaming' || phase.kind === 'done' ? phase.text : '';
+  const generatedWords = countWords(generatedText);
+  /** 写完才算「够」：低于目标 85% 或截断/中断都要提示可以补写 */
+  const showShortfall =
+    phase.kind === 'done' &&
+    (phase.incomplete !== undefined || generatedWords < targetWords * SHORTFALL_RATIO);
+  const remainingWords = Math.max(0, targetWords - generatedWords);
+  const shortfallMessage =
+    remainingWords > 0
+      ? `比目标少约 ${remainingWords} 字；可以继续补写未落地场景，或重新生成。`
+      : '生成未完成；可以继续补写未落地场景，或重新生成。';
 
   return (
     <>
@@ -420,8 +532,8 @@ export function GenerateChapterSheet({
               <div role="alert" className="rounded-xl bg-seal-soft px-3 py-2.5">
                 <p className="text-sm text-seal">
                   {phase.incomplete === 'truncated'
-                    ? '生成被截断，内容不完整。建议重新生成；采用只会保存已生成的部分。'
-                    : '生成已中断，内容不完整。'}
+                    ? '生成被截断，内容不完整。可以继续补写未落地场景，或重新生成；采用只会保存已生成的部分。'
+                    : '生成已中断，内容不完整。可以继续补写未落地场景，或重新生成。'}
                 </p>
               </div>
             ) : null}
@@ -446,6 +558,26 @@ export function GenerateChapterSheet({
                 }
               />
             )}
+
+            {/* 差额/截断提示：只提示与手动补写，不自动续写、不循环到目标 */}
+            {phase.kind === 'done' && showShortfall ? (
+              <div className="flex flex-col gap-2 rounded-xl bg-paper-sunken px-3 py-2.5">
+                <p className="text-sm font-medium text-ink-700">还有场景没落地？</p>
+                <p className="text-xs leading-relaxed text-ink-500">{shortfallMessage}</p>
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  block
+                  disabled={!llm.configured}
+                  onClick={() => void continueWriting()}
+                >
+                  继续补写
+                </Button>
+                <p className="text-xs leading-relaxed text-ink-500">
+                  节拍已齐可直接标完成。补写只补本章还没落地的场景，不是凑字数；不会自动继续。
+                </p>
+              </div>
+            ) : null}
 
             {phase.kind === 'streaming' ? (
               <Button variant="secondary" size="lg" block onClick={() => abortRef.current?.abort()}>

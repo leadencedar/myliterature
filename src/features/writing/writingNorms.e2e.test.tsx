@@ -229,7 +229,10 @@ describe('章节摘要', () => {
     const spy = stubFetch();
     const user = await openEditor();
 
-    await user.click(screen.getByRole('button', { name: '草稿' }));
+    // design §6.6：标记完成不再自动弹摘要，改为手动入口打开并提炼
+    await user.click(screen.getByRole('button', { name: '写摘要' }));
+    const summaryDialog = await screen.findByRole('dialog', { name: '本章摘要' });
+    await user.click(within(summaryDialog).getByRole('button', { name: '提炼本章摘要' }));
     await screen.findByRole('button', { name: /保存摘要/u });
 
     const system = systemOf(spy, 0);
@@ -243,7 +246,10 @@ describe('章节摘要', () => {
     const spy = stubFetch();
     const user = await openEditor();
 
-    await user.click(screen.getByRole('button', { name: '草稿' }));
+    // design §6.6：标记完成不再自动弹摘要，改为手动入口打开并提炼
+    await user.click(screen.getByRole('button', { name: '写摘要' }));
+    const summaryDialog = await screen.findByRole('dialog', { name: '本章摘要' });
+    await user.click(within(summaryDialog).getByRole('button', { name: '提炼本章摘要' }));
     await screen.findByRole('button', { name: /保存摘要/u });
 
     expect(systemOf(spy, 0)).not.toContain(NORM_FIXTURE_MARKER);

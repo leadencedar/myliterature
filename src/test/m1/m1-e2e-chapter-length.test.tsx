@@ -213,7 +213,9 @@ describe('US-4c / 指标 4 · 截断（finish_reason=length）', () => {
 
     expect(screen.getByText('生成未完成')).toBeInTheDocument();
     expect(screen.getByText(/生成被截断，内容不完整/u)).toBeInTheDocument();
-    expect(screen.getByText(/建议重新生成/u)).toBeInTheDocument();
+    expect(
+      screen.getByText(/生成被截断，内容不完整。可以继续补写未落地场景，或重新生成/u),
+    ).toBeInTheDocument();
 
     // P1：结果标题给出「已生成 / 目标」对照
     expect(screen.getByText(/\d+ 字 \/ 目标 6000 字/u)).toBeInTheDocument();

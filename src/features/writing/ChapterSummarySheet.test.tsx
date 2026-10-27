@@ -4,6 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useActiveNovel } from '@/app/store/useActiveNovel';
 import type { Category, Chapter, Novel, SideStory } from '@/domain/schema';
 import { useLlmSettings } from '@/llm/settingsStore';
+import { buildCreateProposal } from '@/proposal/build';
+import { fieldSpecsFor } from '@/proposal/fields';
+import { useArchiveSettings } from './archiveSettings';
 import { completion, jsonResponse, sseResponse, textDeltaEvents } from '@/test/llmFixtures';
 import { createTestHarness, type TestHarness } from '@/test/renderWithProviders';
 import { ChapterSummarySheet } from './ChapterSummarySheet';
@@ -29,6 +32,8 @@ beforeEach(async () => {
   charCategory = (await harness.repository.listCategories(novel.id))[1]!;
   useActiveNovel.setState({ activeNovelId: novel.id });
   localStorage.clear();
+  // 本文件只测手动摘要入口；后台归档在 task-22 的编辑器用例里单独测
+  useArchiveSettings.setState({ autoArchive: false, extractEntries: true });
   useLlmSettings.getState().applyPreset('deepseek');
   useLlmSettings.getState().update({ apiKey: 'sk-test' });
 
@@ -70,22 +75,37 @@ async function openEditor(chapterIndex = 1) {
   return user;
 }
 
-describe('标记完成时自动触发', () => {
-  it('打开摘要抽屉并立即开始提炼', async () => {
-    stubStructured();
+/**
+ * 手动打开摘要抽屉并开始提炼。
+ * design §6.6：标记完成不再自动弹摘要面板，所有摘要入口都从这里走。
+ */
+async function openSummaryAndGenerate(
+  user: ReturnType<typeof userEvent.setup>,
+  options: { done?: boolean } = {},
+) {
+  if (options.done) await user.click(screen.getByRole('button', { name: '草稿' }));
+  await user.click(screen.getByRole('button', { name: options.done ? '补摘要' : '写摘要' }));
+  const dialog = await screen.findByRole('dialog', { name: '本章摘要' });
+  await user.click(within(dialog).getByRole('button', { name: '提炼本章摘要' }));
+  return dialog;
+}
+
+describe('摘要入口（标记完成不再自动弹）', () => {
+  it('标记完成不再自动打开摘要抽屉，也不发请求', async () => {
+    const fetchSpy = stubStructured();
     const user = await openEditor();
 
     await user.click(screen.getByRole('button', { name: '草稿' }));
 
-    // 抽屉自动打开并直接进入生成
-    expect(await screen.findByRole('dialog', { name: '本章摘要' })).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: /保存摘要/u })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '本章摘要' })).not.toBeInTheDocument();
+    // 本文件把自动归档关掉：状态行只提示可手动补摘要
+    expect(await screen.findByText(/自动归档已关闭/)).toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('正文为空时不触发生成', async () => {
+  it('正文为空时标记完成不触发任何模型调用', async () => {
     const fetchSpy = stubStructured();
     const user = await openEditor();
-    // 先清空正文
     await user.clear(screen.getByLabelText('章节正文'));
     await waitFor(() => expect(screen.getByText('已保存')).toBeInTheDocument(), { timeout: 3000 });
 
@@ -97,17 +117,9 @@ describe('标记完成时自动触发', () => {
 
   it('手动入口在缺摘要时高亮为「补摘要」', async () => {
     const user = await openEditor();
-
     expect(screen.getByRole('button', { name: '写摘要' })).toBeInTheDocument();
 
-    // 不触发自动生成地标记完成：先停掉网络
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => Promise.reject(new Error('offline'))),
-    );
     await user.click(screen.getByRole('button', { name: '草稿' }));
-    await screen.findByRole('dialog', { name: '本章摘要' });
-    await user.click(screen.getByRole('button', { name: '关闭' }));
 
     expect(screen.getByRole('button', { name: '补摘要' })).toBeInTheDocument();
   });
@@ -115,7 +127,7 @@ describe('标记完成时自动触发', () => {
 
 describe('摘要落库', () => {
   async function generateAndAccept(user: ReturnType<typeof userEvent.setup>) {
-    await user.click(screen.getByRole('button', { name: '草稿' }));
+    await openSummaryAndGenerate(user);
     await user.click(await screen.findByRole('button', { name: /保存摘要/u }));
   }
 
@@ -144,7 +156,7 @@ describe('摘要落库', () => {
     const user = await openEditor();
 
     // 生成后先看界面提示
-    await user.click(screen.getByRole('button', { name: '草稿' }));
+    await openSummaryAndGenerate(user);
     expect(await screen.findByText(/识别到的出场角色与设定：林越/u)).toBeInTheDocument();
 
     await user.click(await screen.findByRole('button', { name: /保存摘要/u }));
@@ -161,7 +173,7 @@ describe('摘要落库', () => {
     stubStructured();
     const user = await openEditor();
 
-    await user.click(screen.getByRole('button', { name: '草稿' }));
+    await openSummaryAndGenerate(user);
     await screen.findByRole('button', { name: /保存摘要/u });
 
     expect(await harness.repository.getSummaryByChapter(firstChapter.id)).toBeUndefined();
@@ -172,10 +184,9 @@ describe('摘要落库', () => {
     stubStructured();
     const user = await openEditor();
 
-    await user.click(screen.getByRole('button', { name: '草稿' }));
+    const dialog = await openSummaryAndGenerate(user);
     await screen.findByRole('button', { name: /保存摘要/u });
 
-    const dialog = screen.getByRole('dialog', { name: '本章摘要' });
     expect(within(dialog).getByRole('button', { name: /第 1 章摘要/u })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: /全书进展摘要/u })).toBeInTheDocument();
   });
@@ -232,7 +243,7 @@ describe('伏笔累计', () => {
     });
 
     const user = await openEditor(2);
-    await user.click(screen.getByRole('button', { name: '草稿' }));
+    await openSummaryAndGenerate(user);
     await user.click(await screen.findByRole('button', { name: /保存摘要/u }));
 
     await waitFor(async () => {
@@ -267,7 +278,7 @@ describe('摘要接入后续章节的上下文', () => {
     // 先通过界面为第一章生成并确认摘要
     stubStructured();
     const user = await openEditor();
-    await user.click(screen.getByRole('button', { name: '草稿' }));
+    await openSummaryAndGenerate(user);
     await user.click(await screen.findByRole('button', { name: /保存摘要/u }));
     await waitFor(async () =>
       expect(await harness.repository.getSummaryByChapter(firstChapter.id)).toBeDefined(),
@@ -314,7 +325,7 @@ describe('错误处理', () => {
     );
     const user = await openEditor();
 
-    await user.click(screen.getByRole('button', { name: '草稿' }));
+    await openSummaryAndGenerate(user);
 
     expect(await screen.findByRole('alert')).toHaveTextContent('余额不足');
     expect(screen.getByRole('button', { name: '提炼本章摘要' })).toBeInTheDocument();
@@ -324,7 +335,7 @@ describe('错误处理', () => {
     stubStructured({ summary: '', keyEvents: [], appearingEntries: [] });
     const user = await openEditor();
 
-    await user.click(screen.getByRole('button', { name: '草稿' }));
+    await openSummaryAndGenerate(user);
 
     expect(await screen.findByRole('alert')).toHaveTextContent('模型输出不符合预期格式');
   });
@@ -490,5 +501,53 @@ describe('外传章节', () => {
     const targets = (await harness.repository.listProposals(novel.id)).map((item) => item.target);
     expect(targets.sort()).toEqual(['chapterSummary', 'sideStory']);
     expect(targets).not.toContain('novel');
+  });
+});
+
+describe('与归档的幂等（design §6.7）', () => {
+  /** 造一条本章 pending 摘要提案，模拟后台归档刚生成的档案 */
+  async function seedPendingArchiveSummary() {
+    await harness.repository.createProposals([
+      buildCreateProposal({
+        novelId: novel.id,
+        batchId: 'batch-archive',
+        origin: 'extract',
+        target: 'chapterSummary',
+        label: '第 1 章摘要',
+        specs: fieldSpecsFor('chapterSummary'),
+        payload: {
+          chapterId: firstChapter.id,
+          summary: '归档生成的旧摘要',
+          keyEvents: ['旧事件'],
+          appearingEntryIds: [],
+          openThreads: [],
+        },
+      }),
+    ]);
+  }
+
+  it('手动摘要入口提示「本章档案待确认」', async () => {
+    await seedPendingArchiveSummary();
+    const user = await openEditor();
+    await user.click(screen.getByRole('button', { name: '写摘要' }));
+
+    const dialog = await screen.findByRole('dialog', { name: '本章摘要' });
+    expect(await within(dialog).findByText(/本章档案待确认/u)).toBeInTheDocument();
+  });
+
+  it('重新提炼前清掉本章 pending 摘要，收件箱不会出现两份', async () => {
+    await seedPendingArchiveSummary();
+    stubStructured();
+    const user = await openEditor();
+    await openSummaryAndGenerate(user);
+    // 点完「提炼本章摘要」只代表请求发出；默认并行全量时紧接着读仓储会读到空，
+    // 等提案确认区出现再读（「保存摘要」按钮出现 = createProposals 已完成）
+    await screen.findByRole('button', { name: /保存摘要/u });
+
+    const pending = await harness.repository.listProposals(novel.id, { status: 'pending' });
+    const summaries = pending.filter((proposal) => proposal.target === 'chapterSummary');
+    expect(summaries).toHaveLength(1);
+    expect(JSON.stringify(summaries[0]?.payload)).toContain(SUMMARY_RESULT.summary);
+    expect(JSON.stringify(pending)).not.toContain('归档生成的旧摘要');
   });
 });

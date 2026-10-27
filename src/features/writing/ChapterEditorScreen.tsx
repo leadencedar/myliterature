@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ContextRequest } from '@/context/ContextBuilder';
+import type { NovelRepository } from '@/data/NovelRepository';
 import { useRepository } from '@/data/RepositoryProvider';
 import { useInvalidate } from '@/data/useRepoQuery';
 import { countWords } from '@/domain/primitives';
-import type { Chapter, SideStory } from '@/domain/schema';
+import type { Chapter, Proposal, SideStory } from '@/domain/schema';
 import { chapterLabel } from '@/domain/sideStory';
 import { Button, IconButton } from '@/ui/Button';
 import { ConfirmDialog } from '@/ui/Sheet';
@@ -13,6 +14,9 @@ import { normsInScope } from '@/domain/writingNorm';
 import { useLlm } from '@/llm/useLlm';
 import { recordProgress } from '../plan/recordProgress';
 import { useScenarioChapterContext } from '../scenario/useScenarioChapterContext';
+import { ArchiveInboxSheet } from './ArchiveInboxSheet';
+import { archiveChapter, type ArchiveChapterResult } from './archiveChapter';
+import { useArchiveSettings } from './archiveSettings';
 import { ChapterSummarySheet } from './ChapterSummarySheet';
 import { TranslateSheet } from './TranslateSheet';
 import { GenerateChapterSheet } from './GenerateChapterSheet';
@@ -40,6 +44,70 @@ const SAVE_LABELS: Record<SaveState, string> = {
   saving: '保存中…',
   error: '保存失败',
 };
+
+/**
+ * 正在后台跑的归档任务（按章节 id 去重）。
+ *
+ * 编辑器可能在 React StrictMode 下重复挂载，作者也可能在「完成 → 草稿 → 完成」
+ * 之间连点；同一章任何时刻只允许一次付费调用，后来的调用复用同一个 Promise。
+ * 放 module 级而不是组件 state：重挂载后 state 会丢，而请求还在飞。
+ */
+const inFlightArchives = new Map<string, Promise<ArchiveChapterResult>>();
+
+type ArchiveState =
+  | { kind: 'idle' }
+  | { kind: 'running' }
+  | {
+      kind: 'done';
+      batchId: string;
+      pendingCount: number;
+      entryCount: number;
+      summaryCreated: boolean;
+      entriesDegraded: boolean;
+    }
+  | { kind: 'error'; message: string }
+  /** 自动归档被关掉：只提示可手动补摘要，不自动调用 */
+  | { kind: 'manual' }
+  /** 没配置模型：不自动调用，提示去设置 */
+  | { kind: 'unconfigured' };
+
+/** 提案 payload 是 unknown，读字段前先收窄成对象 */
+function proposalPayload(proposal: Proposal): Record<string, unknown> | undefined {
+  const payload = proposal.payload;
+  return payload !== null && typeof payload === 'object'
+    ? (payload as Record<string, unknown>)
+    : undefined;
+}
+
+/**
+ * 本章是否已有待确认的归档提案（design §6.5）：挂载时恢复「待确认」态，不重跑。
+ *
+ * 归属判定：摘要提案按 `payload.chapterId`；条目提案按 `payload.sourceChapterIds`。
+ * 进展 replace 提案是作品级的，没法可靠归属到某一章，只用来数本批条目数。
+ */
+async function findPendingArchive(
+  repository: NovelRepository,
+  novelId: string,
+  chapterId: string,
+): Promise<{ batchId: string; pendingCount: number } | null> {
+  const pending = await repository.listProposals(novelId, { status: 'pending' });
+  const owned = pending.filter((proposal) => {
+    const payload = proposalPayload(proposal);
+    if (!payload) return false;
+    if (proposal.target === 'chapterSummary') return payload.chapterId === chapterId;
+    if (proposal.target === 'knowledgeEntry') {
+      const sources = payload.sourceChapterIds;
+      return Array.isArray(sources) && sources.includes(chapterId);
+    }
+    return false;
+  });
+  const anchor = owned[0];
+  if (!anchor?.batchId) return null;
+  const pendingCount = pending.filter(
+    (proposal) => proposal.target === 'knowledgeEntry' && proposal.batchId === anchor.batchId,
+  ).length;
+  return { batchId: anchor.batchId, pendingCount };
+}
 
 interface ChapterEditorScreenProps {
   chapter: Chapter;
@@ -99,8 +167,11 @@ export function ChapterEditorScreen({
    */
   const [sourceBackup, setSourceBackup] = useState(chapter.sourceContent);
   const [summaryOpen, setSummaryOpen] = useState(false);
-  const [summaryAutoStart, setSummaryAutoStart] = useState(false);
   const [selectionRange, setSelectionRange] = useState({ start: 0, end: 0 });
+  /** 后台归档的会话内状态（design §3）：不阻塞编辑，不打开 Sheet */
+  const [archiveState, setArchiveState] = useState<ArchiveState>({ kind: 'idle' });
+  const [archiveInboxOpen, setArchiveInboxOpen] = useState(false);
+  const archiveSettings = useArchiveSettings();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   /**
@@ -122,9 +193,78 @@ export function ChapterEditorScreen({
     instruction: string;
   } | null>(null);
 
+  /**
+   * 挂载时恢复本章的归档状态（design §6.5）：只查 pending、不重跑。
+   * 这样重新打开一个「已完成但还没确认档案」的章节时，作者仍然看得到入口；
+   * React StrictMode 下 effect 跑两遍也只是两次只读查询。
+   */
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const pending = await findPendingArchive(repository, context.novel.id, chapter.id);
+        if (!cancelled && pending) {
+          // 只在还没有状态时恢复：查询期间作者可能刚触发归档，别用旧 pending 覆盖新状态
+          setArchiveState((current) =>
+            current.kind === 'idle'
+              ? {
+                  kind: 'done',
+                  ...pending,
+                  entryCount: 0,
+                  summaryCreated: true,
+                  entriesDegraded: false,
+                }
+              : current,
+          );
+        }
+      } catch {
+        // 只是恢复提示；查询失败不影响写作，下次标完成会重新归档
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // chapter.id 变化由调用方 key 保证重新挂载；novelId 不变
+  }, [repository, context.novel.id, chapter.id]);
+
   const hasSummary = context.summaries.some((item) => item.chapterId === chapter.id);
   /** 已完成但没有摘要：摘要链在这里断了，需要提醒 */
   const needsSummary = status === 'done' && !hasSummary;
+
+  /**
+   * 大纲节点完成提示（design §3）：本章与同节点下的所有章节都已完成、
+   * 且节点本身还没标完成时才提示。只提示，点击才写 —— 不自动改大纲状态。
+   */
+  const outlineNode = chapter.outlineNodeId
+    ? context.outline.find((item) => item.id === chapter.outlineNodeId)
+    : undefined;
+  /** 本次会话内已处理（标完成或点「知道了」）后不再提示；不写任何状态 */
+  const [outlinePromptDismissed, setOutlinePromptDismissed] = useState(false);
+  const outlineChapters = chapter.outlineNodeId
+    ? context.chapters.filter((item) => item.outlineNodeId === chapter.outlineNodeId)
+    : [];
+  const allOutlineChaptersDone =
+    outlineChapters.length > 0 &&
+    outlineChapters.every((item) =>
+      item.id === chapter.id ? status === 'done' : item.status === 'done',
+    );
+  const canMarkOutlineDone =
+    status === 'done' &&
+    !outlinePromptDismissed &&
+    outlineNode !== undefined &&
+    outlineNode.status !== 'done' &&
+    allOutlineChaptersDone;
+
+  async function markOutlineDone() {
+    if (!outlineNode) return;
+    try {
+      await repository.updateOutlineNode(outlineNode.id, { status: 'done' });
+      setOutlinePromptDismissed(true);
+      invalidate();
+    } catch {
+      // 写失败就保持提示，作者可以再点一次
+    }
+  }
 
   /**
    * 撤销栈。
@@ -197,6 +337,66 @@ export function ChapterEditorScreen({
   function saveNow() {
     if (timerRef.current) clearTimeout(timerRef.current);
     void flush.current();
+  }
+
+  /**
+   * 后台归档当前章节（design §3 / §6.5）。
+   *
+   * 用编辑器里的最新正文，不等防抖保存 —— 作者刚打完最后一句就点完成时，
+   * 库里的版本可能还差这 800ms。失败只更新状态行，不弹窗、不打断写作；
+   * 归档服务「失败不写任何提案」，所以重试是安全的。
+   */
+  async function runArchive() {
+    const chapterSnapshot: Chapter = { ...chapter, title, content, status: 'done' };
+    let task = inFlightArchives.get(chapter.id);
+    if (!task) {
+      const settings = useArchiveSettings.getState();
+      task = archiveChapter(
+        { repository, llm },
+        {
+          novel: context.novel,
+          chapter: chapterSnapshot,
+          chapters: context.chapters,
+          summaries: context.summaries,
+          entries: context.entries,
+          categories: context.categories,
+          ...(sideStory ? { sideStory } : {}),
+          ...(context.writingNorms ? { writingNorms: context.writingNorms } : {}),
+          options: { extractEntries: settings.extractEntries },
+        },
+      ).finally(() => {
+        inFlightArchives.delete(chapter.id);
+      });
+      inFlightArchives.set(chapter.id, task);
+    }
+    setArchiveState({ kind: 'running' });
+    try {
+      const result = await task;
+      // 新提案要尽快出现在页面「待确认」里，也保证 [查看] 能查到
+      invalidate();
+      setArchiveState({ kind: 'done', ...result });
+    } catch (cause) {
+      setArchiveState({
+        kind: 'error',
+        message: cause instanceof Error ? cause.message : '归档失败',
+      });
+    }
+  }
+
+  /**
+   * 标记完成时的归档入口。
+   * 只在本次会话的 draft→done 转换里调用；打开一个已完成的旧章节不会走到这里。
+   */
+  function handleMarkedDone() {
+    if (!archiveSettings.autoArchive) {
+      setArchiveState({ kind: 'manual' });
+      return;
+    }
+    if (!llm.configured) {
+      setArchiveState({ kind: 'unconfigured' });
+      return;
+    }
+    void runArchive();
   }
 
   /**
@@ -497,10 +697,7 @@ export function ChapterEditorScreen({
 
           <button
             type="button"
-            onClick={() => {
-              setSummaryAutoStart(false);
-              setSummaryOpen(true);
-            }}
+            onClick={() => setSummaryOpen(true)}
             className={[
               'rounded-full px-2.5 py-1 text-[0.6875rem] font-medium transition-colors',
               needsSummary ? 'bg-accent-soft text-accent' : 'bg-paper-sunken text-ink-500',
@@ -516,11 +713,15 @@ export function ChapterEditorScreen({
               setStatus(next);
               scheduleSave({ status: next });
               // 标完成代表作者认可这是定稿：未完成稿的提醒到此为止
-              if (next === 'done') clearIncomplete(chapter.id);
-              // 标记完成即触发摘要生成：靠用户记得手动补，摘要链很快就会断
-              if (next === 'done' && content.trim()) {
-                setSummaryAutoStart(true);
-                setSummaryOpen(true);
+              if (next === 'done') {
+                clearIncomplete(chapter.id);
+                // design §6.6：不再自动弹摘要面板；改为后台生成档案，不打断收工。
+                // 正文为空时不做无意义的付费调用
+                if (content.trim()) handleMarkedDone();
+                else setArchiveState({ kind: 'idle' });
+              } else {
+                // 退回草稿：归档状态行不再适用（已产生的 pending 提案仍在，重开会恢复）
+                setArchiveState({ kind: 'idle' });
               }
             }}
             className={[
@@ -531,6 +732,71 @@ export function ChapterEditorScreen({
             {status === 'done' ? '已完成' : '草稿'}
           </button>
         </div>
+        {/* 后台归档状态行（design §3）：不打开 Sheet、不阻塞编辑 */}
+        {archiveState.kind !== 'idle' ? (
+          <div role="status" className="reading-column px-3 pb-2 lg:px-1">
+            <div className="flex flex-wrap items-center gap-2 rounded-lg bg-paper-sunken px-3 py-2 text-xs leading-relaxed text-ink-700">
+              {archiveState.kind === 'running' ? (
+                <span>正在生成本章摘要与设定…（后台运行，可继续编辑）</span>
+              ) : archiveState.kind === 'done' ? (
+                <>
+                  <span className="flex-1">
+                    本章摘要与设定已生成：
+                    {archiveState.pendingCount > 0
+                      ? `摘要 + ${archiveState.pendingCount} 条知识库更新待确认`
+                      : '摘要与进展待确认'}
+                    {archiveState.entriesDegraded ? '（知识库条目本轮未生成）' : ''}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setArchiveInboxOpen(true)}
+                    className="shrink-0 rounded-full bg-ink-900 px-2.5 py-1 text-[0.6875rem] font-medium text-paper"
+                  >
+                    查看
+                  </button>
+                </>
+              ) : archiveState.kind === 'error' ? (
+                <>
+                  <span className="flex-1 text-seal">
+                    本章摘要与设定生成失败：{archiveState.message}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void runArchive()}
+                    className="shrink-0 rounded-full bg-paper-raised px-2.5 py-1 text-[0.6875rem] font-medium text-ink-700"
+                  >
+                    重试
+                  </button>
+                </>
+              ) : archiveState.kind === 'manual' ? (
+                <span>自动归档已关闭；可手动补摘要（点上方「补摘要」）。</span>
+              ) : (
+                <span>未配置模型，无法自动生成本章摘要与设定；请先到「设置」填写 API Key。</span>
+              )}
+            </div>
+          </div>
+        ) : null}
+        {canMarkOutlineDone ? (
+          <div className="reading-column px-3 pb-2 lg:px-1">
+            <div className="flex flex-wrap items-center gap-2 rounded-lg bg-paper-sunken px-3 py-2 text-xs leading-relaxed text-ink-700">
+              <span className="flex-1">大纲节点「{outlineNode.title}」可以标为完成。</span>
+              <button
+                type="button"
+                onClick={() => void markOutlineDone()}
+                className="shrink-0 rounded-full bg-paper-raised px-2.5 py-1 text-[0.6875rem] font-medium text-ink-700"
+              >
+                标记完成
+              </button>
+              <button
+                type="button"
+                onClick={() => setOutlinePromptDismissed(true)}
+                className="shrink-0 rounded-full px-2.5 py-1 text-[0.6875rem] font-medium text-ink-500"
+              >
+                知道了
+              </button>
+            </div>
+          </div>
+        ) : null}
         {/* P0：截断/中断稿采用后必须在编辑器里留痕，否则半章会被当成定稿 */}
         {incompleteDraft ? (
           <div role="status" className="reading-column px-3 pb-2 lg:px-1">
@@ -689,8 +955,20 @@ export function ChapterEditorScreen({
         summaries={context.summaries}
         entries={context.entries}
         {...(sideStory ? { sideStory } : {})}
-        autoStart={summaryAutoStart}
+        autoStart={false}
         onClose={() => setSummaryOpen(false)}
+      />
+
+      <ArchiveInboxSheet
+        open={archiveInboxOpen && archiveState.kind === 'done'}
+        novelId={context.novel.id}
+        batchId={archiveState.kind === 'done' ? archiveState.batchId : null}
+        onClose={() => setArchiveInboxOpen(false)}
+        onSettled={() => {
+          invalidate();
+          setArchiveInboxOpen(false);
+          setArchiveState({ kind: 'idle' });
+        }}
       />
 
       <ConfirmDialog

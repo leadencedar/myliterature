@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useLlmSettings } from '@/llm/settingsStore';
 import { jsonResponse, sseResponse, textDeltaEvents } from '@/test/llmFixtures';
 import { createTestHarness, type TestHarness } from '@/test/renderWithProviders';
+import { ARCHIVE_SETTINGS_STORAGE_KEY, useArchiveSettings } from '../writing/archiveSettings';
 import { SettingsPage } from './SettingsPage';
 
 let harness: TestHarness;
@@ -18,6 +19,7 @@ beforeEach(async () => {
   localStorage.clear();
   // 配置 store 是持久化单例，用例之间必须重置
   useLlmSettings.getState().applyPreset('deepseek');
+  useArchiveSettings.setState({ autoArchive: true, extractEntries: true });
 });
 
 afterEach(async () => {
@@ -182,5 +184,31 @@ describe('设置页 · 连通性测试', () => {
     await user.click(screen.getByRole('button', { name: '测试连接' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('白名单');
+  });
+});
+
+describe('设置页 · 写作辅助', () => {
+  it('默认开启自动归档与条目提取，并说明成本', () => {
+    render(<SettingsPage />);
+
+    expect(screen.getByLabelText('完成后自动生成本章档案')).toBeChecked();
+    expect(screen.getByLabelText('归档时提取知识库条目')).toBeChecked();
+    expect(screen.getByText(/每章归档 1 次结构化调用/u)).toBeInTheDocument();
+    expect(screen.getByText(/摘要与知识库更新，可关条目/u)).toBeInTheDocument();
+    expect(screen.getByText(/摘要与进展是摘要链的来源，必须生成/u)).toBeInTheDocument();
+  });
+
+  it('开关写入归档设置并持久化', async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    await user.click(screen.getByLabelText('完成后自动生成本章档案'));
+    expect(useArchiveSettings.getState().autoArchive).toBe(false);
+    await user.click(screen.getByLabelText('归档时提取知识库条目'));
+    expect(useArchiveSettings.getState().extractEntries).toBe(false);
+
+    const stored = localStorage.getItem(ARCHIVE_SETTINGS_STORAGE_KEY) ?? '';
+    expect(stored).toContain('"autoArchive":false');
+    expect(stored).toContain('"extractEntries":false');
   });
 });

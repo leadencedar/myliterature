@@ -284,7 +284,9 @@ describe('S6 · replace', () => {
 
     await expect(repo.commitOutlineSubtree(novel.id, anchor.id, [], 'replace')).rejects.toThrow();
     await expect(repo.commitOutlineSubtree(novel.id, null, [], 'replace')).rejects.toThrow();
-    expect((await outline()).map((node) => node.title)).toEqual(['锚点', '旧子']);
+    // 两个节点同层时 order 都是 0，listOutline 以 createdAt 兜底；并发的毫秒时间戳可能相同，
+    // 用排序后的标题集合断言，避免依赖底层行序（全量并发跑时的偶发翻转）
+    expect((await outline()).map((node) => node.title).sort()).toEqual(['旧子', '锚点'].sort());
   });
 });
 

@@ -162,6 +162,8 @@ describe('截断与中断防线（US-4）', () => {
 
     expect(screen.getByText('生成未完成')).toBeInTheDocument();
     expect(screen.getByText(/生成被截断，内容不完整/u)).toBeInTheDocument();
+    // 红框与下方差额提示都写了这两条路：至少出现一次且文案并列
+    expect(screen.getAllByText(/可以继续补写未落地场景，或重新生成/u).length).toBeGreaterThan(0);
     expect(screen.getByText('8 字 / 目标 6000 字')).toBeInTheDocument();
     expect(screen.queryByText('生成完成')).not.toBeInTheDocument();
   });
@@ -237,7 +239,7 @@ describe('截断与中断防线（US-4）', () => {
     await user.click(screen.getByRole('button', { name: '停止生成' }));
 
     expect(await screen.findByText('生成未完成')).toBeInTheDocument();
-    expect(screen.getByText('生成已中断，内容不完整。')).toBeInTheDocument();
+    expect(screen.getByText(/生成已中断，内容不完整。/u)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '采用为正文' }));
     const dialog = await screen.findByRole('dialog', { name: '仍要采用不完整内容？' });
@@ -294,5 +296,165 @@ describe('400 max_tokens 兼容回退', () => {
       await screen.findByText('请求被服务端拒绝，可能是模型名或参数不被支持'),
     ).toBeInTheDocument();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('生成差额与手动继续补写（S4）', () => {
+  /** 3000 个汉字 = countWords 3000，相对 6000 目标正好一半（<85%） */
+  const HALF = '字'.repeat(3000);
+
+  /** 按调用顺序返回不同的流式响应，并记录每次请求体 */
+  function stubSequence(responses: { deltas: string[]; finishReason?: string }[]) {
+    const bodies: Record<string, unknown>[] = [];
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+        const item = responses[Math.min(call, responses.length - 1)]!;
+        call += 1;
+        const extra = item.finishReason
+          ? [
+              `data: ${JSON.stringify({
+                choices: [{ delta: {}, finish_reason: item.finishReason }],
+              })}\n\n`,
+            ]
+          : [];
+        return Promise.resolve(sseResponse(textDeltaEvents(item.deltas, extra)));
+      }),
+    );
+    return bodies;
+  }
+
+  type ChatBody = {
+    messages: { role: string; content: string }[];
+    max_tokens?: number;
+  };
+
+  it('短稿显示差额提示，但不会自动续写', async () => {
+    const bodies = stubSequence([{ deltas: [HALF] }]);
+    const { user } = renderSheet();
+    await generate(user);
+
+    expect(screen.getByText('还有场景没落地？')).toBeInTheDocument();
+    expect(
+      screen.getByText('比目标少约 3000 字；可以继续补写未落地场景，或重新生成。'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/节拍已齐可直接标完成。补写只补本章还没落地的场景/u),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '继续补写' })).toBeInTheDocument();
+    // 不自动：等提示渲染完也只有首次生成这一个请求
+    expect(bodies).toHaveLength(1);
+  });
+
+  it('点「继续补写」用原 user + 当前正文作 history，结果追加到末尾', async () => {
+    const bodies = stubSequence([{ deltas: [HALF] }, { deltas: ['补写内容。'] }]);
+    const { user } = renderSheet();
+    await generate(user);
+
+    await user.click(screen.getByRole('button', { name: '继续补写' }));
+
+    const preview = screen.getByLabelText('生成结果（可直接修改）');
+    await waitFor(() => expect(preview).toHaveValue(`${HALF}\n\n补写内容。`));
+
+    expect(bodies).toHaveLength(2);
+    const body = bodies[1] as unknown as ChatBody;
+    const messages = body.messages;
+    // system + 原 user 提示词 + assistant 当前正文 + 续写指令
+    expect(messages.map((message) => message.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'user',
+    ]);
+    expect(messages[1]?.content).toContain('本章目标约 6000 字');
+    expect(messages[2]?.content).toBe(HALF);
+    expect(messages[3]?.content).toBe(
+      '接着上面的内容继续写，只补本章尚未落地的场景；还差约 3000 字。不要重复已经写过的内容，不要总结。',
+    );
+    // 按剩余 3000 字推导：ceil(3000×1.8)+800=6200，而不是整章目标推导的 8192
+    expect(body.max_tokens).toBe(6200);
+  });
+
+  it('补写到目标 85% 以上后差额提示消失', async () => {
+    const shortNode = await harness.repository.createOutlineNode(context.novel.id, {
+      title: '第2章 短章',
+      parentId: volume.id,
+      targetWords: 100,
+    });
+    stubSequence([{ deltas: ['短短短'] }, { deltas: ['续'.repeat(90)] }]);
+    const { user } = renderSheet({
+      outline: [...context.outline, shortNode],
+      targetNodeId: shortNode.id,
+    });
+    await generate(user);
+    expect(screen.getByText(/比目标少约/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '继续补写' }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('生成结果（可直接修改）')).toHaveValue(
+        `短短短\n\n${'续'.repeat(90)}`,
+      ),
+    );
+    expect(screen.queryByText(/比目标少约/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '继续补写' })).not.toBeInTheDocument();
+  });
+
+  it('续写被截断仍标记未完成，可以再次补写', async () => {
+    stubSequence([{ deltas: ['短稿。'] }, { deltas: ['补写被截断'], finishReason: 'length' }]);
+    const { user } = renderSheet();
+    await generate(user);
+
+    await user.click(screen.getByRole('button', { name: '继续补写' }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('生成结果（可直接修改）')).toHaveValue('短稿。\n\n补写被截断'),
+    );
+    expect(screen.getByText('生成未完成')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '继续补写' })).toBeInTheDocument();
+  });
+
+  it('续写过程中可以停止：保留已补部分并标记未完成', async () => {
+    const encoder = new TextEncoder();
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+        call += 1;
+        if (call === 1) return Promise.resolve(sseResponse(textDeltaEvents(['短稿。'])));
+        const signal = init?.signal ?? undefined;
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ choices: [{ delta: { content: '补到一半' } }] })}\n\n`,
+              ),
+            );
+            // 不主动 close：等用户点「停止生成」触发 abort
+            signal?.addEventListener('abort', () =>
+              controller.error(new DOMException('Aborted', 'AbortError')),
+            );
+          },
+        });
+        return Promise.resolve(
+          new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+        );
+      }),
+    );
+
+    const { user } = renderSheet();
+    await generate(user);
+    await user.click(screen.getByRole('button', { name: '继续补写' }));
+
+    // 补写期间沿用流式预览与「停止生成」
+    await screen.findByText(/补到一半/);
+    await user.click(screen.getByRole('button', { name: '停止生成' }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('生成结果（可直接修改）')).toHaveValue('短稿。\n\n补到一半'),
+    );
+    expect(screen.getByText('生成未完成')).toBeInTheDocument();
   });
 });

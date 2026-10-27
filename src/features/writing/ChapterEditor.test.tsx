@@ -6,7 +6,10 @@ import { toLocalDate } from '@/domain/primitives';
 import type { Category, Novel, OutlineNode } from '@/domain/schema';
 import { useLlmSettings } from '@/llm/settingsStore';
 import { completion, jsonResponse, sseResponse, textDeltaEvents } from '@/test/llmFixtures';
+import { buildCreateProposal } from '@/proposal/build';
+import { fieldSpecsFor } from '@/proposal/fields';
 import { createTestHarness, type TestHarness } from '@/test/renderWithProviders';
+import { useArchiveSettings } from './archiveSettings';
 import { useIncompleteDrafts } from './incompleteDrafts';
 import { WritingPage } from './WritingPage';
 
@@ -23,6 +26,8 @@ beforeEach(async () => {
   localStorage.clear();
   // 「未完成稿留痕」是内存 store，用例之间不能串味
   useIncompleteDrafts.setState({ chapterIds: {} });
+  // 默认关掉后台归档：M1 用例不测归档，M2 归档用例里再显式打开
+  useArchiveSettings.setState({ autoArchive: false, extractEntries: true });
   useLlmSettings.getState().applyPreset('deepseek');
   useLlmSettings.getState().update({ apiKey: 'sk-test' });
 
@@ -490,9 +495,8 @@ describe('整章生成', () => {
     await user.click(screen.getByRole('button', { name: '草稿' }));
 
     expect(screen.queryByText(INCOMPLETE_HINT)).not.toBeInTheDocument();
-    // 标记完成会顺带弹摘要抽屉，关掉再结束用例
-    const summary = screen.queryByRole('dialog', { name: '本章摘要' });
-    if (summary) await user.click(within(summary).getByRole('button', { name: '关闭' }));
+    // design §6.6：标记完成不再自动弹摘要面板
+    expect(screen.queryByRole('dialog', { name: '本章摘要' })).not.toBeInTheDocument();
   });
 
   it('完整采用不出现提示，并清掉之前留下的提示', async () => {
@@ -669,8 +673,7 @@ describe('产出自动记入计划', () => {
       expect((await logToday())?.chaptersCompleted).toBe(1);
     });
 
-    // 关掉自动弹出的摘要抽屉，回到编辑器
-    await user.click(screen.getByRole('button', { name: '关闭' }));
+    // design §6.6：标记完成不再自动弹摘要面板，直接继续用状态行
     await user.click(await screen.findByRole('button', { name: '已完成' }));
     await user.click(await screen.findByRole('button', { name: '草稿' }));
 
@@ -1025,5 +1028,232 @@ describe('外传章节', () => {
     await user.click(screen.getByRole('button', { name: '生成本章' }));
     await screen.findByText('本次注入');
     expect(screen.queryByLabelText('参考主线进展')).not.toBeInTheDocument();
+  });
+});
+
+describe('标记完成后的后台归档（S3）', () => {
+  const ARCHIVE_RESULT = {
+    entries: [],
+    summary: '本章摘要。',
+    keyEvents: ['事件'],
+    appearingEntries: [],
+    newOpenThreads: ['新伏笔'],
+    resolvedThreads: [],
+    rollingSummary: '截至本章的进展。',
+  };
+
+  /** mock 归档用 extract-settings 响应，并记录请求体 */
+  function stubArchive(result: unknown = ARCHIVE_RESULT) {
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+        return Promise.resolve(jsonResponse(completion(JSON.stringify(result))));
+      }),
+    );
+    return bodies;
+  }
+
+  async function markDoneWithContent(
+    user: ReturnType<typeof userEvent.setup>,
+    content = '雪落了整夜，追兵在门外。',
+  ) {
+    await user.type(screen.getByLabelText('章节正文'), content);
+    await waitFor(() => expect(screen.getByText('已保存')).toBeInTheDocument(), { timeout: 3000 });
+    await user.click(screen.getByRole('button', { name: '草稿' }));
+  }
+
+  it('标记完成触发一次后台归档，不弹摘要面板；查看并关闭不写库', async () => {
+    useArchiveSettings.setState({ autoArchive: true, extractEntries: true });
+    const bodies = stubArchive();
+    const user = await enterEditor();
+    await markDoneWithContent(user);
+
+    // design §6.6：不再自动弹摘要面板
+    expect(screen.queryByRole('dialog', { name: '本章摘要' })).not.toBeInTheDocument();
+    expect(await screen.findByText(/本章摘要与设定已生成/)).toBeInTheDocument();
+    expect(bodies).toHaveLength(1);
+    // 归档用的是编辑器里的最新正文，不必等防抖保存
+    const body = bodies[0] as { messages: { role: string; content: string }[] };
+    expect(body.messages.find((message) => message.role === 'user')?.content).toContain(
+      '雪落了整夜',
+    );
+
+    await user.click(screen.getByRole('button', { name: '查看' }));
+    const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
+    expect(within(dialog).getByRole('button', { name: /采用本批档案/u })).toBeInTheDocument();
+
+    // 关闭不写任何东西
+    await user.click(within(dialog).getByRole('button', { name: '关闭' }));
+    const chapterId = (await harness.repository.listChapters(novel.id))[0]!.id;
+    expect(await harness.repository.getSummaryByChapter(chapterId)).toBeUndefined();
+    expect((await harness.repository.getNovel(novel.id))?.rollingSummary).toBe('');
+  });
+
+  it('采用本批档案后摘要与进展落库，状态行清空', async () => {
+    useArchiveSettings.setState({ autoArchive: true });
+    stubArchive();
+    const user = await enterEditor();
+    await markDoneWithContent(user);
+    await screen.findByText(/本章摘要与设定已生成/);
+
+    await user.click(screen.getByRole('button', { name: '查看' }));
+    const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
+    await user.click(within(dialog).getByRole('button', { name: /采用本批档案/u }));
+
+    const chapterId = (await harness.repository.listChapters(novel.id))[0]!.id;
+    await waitFor(async () => {
+      expect(await harness.repository.getSummaryByChapter(chapterId)).toMatchObject({
+        summary: '本章摘要。',
+      });
+    });
+    expect((await harness.repository.getNovel(novel.id))?.rollingSummary).toBe('截至本章的进展。');
+    await waitFor(() => expect(screen.queryByText(/本章摘要与设定已生成/)).not.toBeInTheDocument());
+  });
+
+  it('自动归档关闭时不调用模型，只提示可手动补摘要', async () => {
+    useArchiveSettings.setState({ autoArchive: false });
+    const bodies = stubArchive();
+    const user = await enterEditor();
+    await markDoneWithContent(user);
+
+    expect(await screen.findByText(/自动归档已关闭/)).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '本章摘要' })).not.toBeInTheDocument();
+    expect(bodies).toHaveLength(0);
+
+    // 手动入口不受影响
+    await user.click(screen.getByRole('button', { name: '补摘要' }));
+    const dialog = await screen.findByRole('dialog', { name: '本章摘要' });
+    expect(within(dialog).getByRole('button', { name: '提炼本章摘要' })).toBeInTheDocument();
+  });
+
+  it('未配置模型时不自动归档，提示去设置', async () => {
+    useArchiveSettings.setState({ autoArchive: true });
+    useLlmSettings.getState().clearApiKey();
+    const bodies = stubArchive();
+    const user = await enterEditor();
+    await markDoneWithContent(user);
+
+    expect(await screen.findByText(/未配置模型/)).toBeInTheDocument();
+    expect(bodies).toHaveLength(0);
+  });
+
+  it('归档失败显示原因；重试成功后恢复', async () => {
+    useArchiveSettings.setState({ autoArchive: true });
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => {
+        call += 1;
+        if (call === 1) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: { message: '服务暂时不可用' } }), {
+              status: 500,
+              headers: { 'Content-Type': 'application/json' },
+            }),
+          );
+        }
+        return Promise.resolve(jsonResponse(completion(JSON.stringify(ARCHIVE_RESULT))));
+      }),
+    );
+    const user = await enterEditor();
+    await markDoneWithContent(user);
+
+    expect(await screen.findByText(/本章摘要与设定生成失败/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '重试' }));
+    expect(await screen.findByText(/本章摘要与设定已生成/)).toBeInTheDocument();
+  });
+
+  it('打开已有 pending 档案的已完成章节：显示待确认，不重跑', async () => {
+    useArchiveSettings.setState({ autoArchive: true });
+    const existing = await harness.repository.createChapter(novel.id, {
+      title: '第1章 雪夜',
+      content: '雪落了整夜。',
+      outlineNodeId: chapterNode.id,
+      status: 'done',
+    });
+    await harness.repository.createProposals([
+      buildCreateProposal({
+        novelId: novel.id,
+        batchId: 'batch-existing',
+        origin: 'extract',
+        target: 'chapterSummary',
+        label: '第 1 章摘要',
+        specs: fieldSpecsFor('chapterSummary'),
+        payload: {
+          chapterId: existing.id,
+          summary: '上次归档的摘要',
+          keyEvents: ['事件'],
+          appearingEntryIds: [],
+          openThreads: [],
+        },
+      }),
+    ]);
+    const bodies = stubArchive();
+    await enterEditor();
+
+    expect(await screen.findByText(/本章摘要与设定已生成/)).toBeInTheDocument();
+    expect(bodies).toHaveLength(0);
+  });
+
+  it('同节点下章节全部完成时提示大纲节点可标完成，点击才写', async () => {
+    useArchiveSettings.setState({ autoArchive: false });
+    const user = await enterEditor();
+    await markDoneWithContent(user);
+
+    expect(await screen.findByText(/大纲节点「第1章 雪夜」可以标为完成/)).toBeInTheDocument();
+    const before = (await harness.repository.listOutline(novel.id)).find(
+      (item) => item.id === chapterNode.id,
+    );
+    expect(before?.status).not.toBe('done');
+
+    await user.click(screen.getByRole('button', { name: '标记完成' }));
+    await waitFor(async () => {
+      const after = (await harness.repository.listOutline(novel.id)).find(
+        (item) => item.id === chapterNode.id,
+      );
+      expect(after?.status).toBe('done');
+    });
+    expect(screen.queryByText(/可以标为完成/)).not.toBeInTheDocument();
+  });
+
+  it('大纲完成提示可以「知道了」隐藏，且不写节点状态', async () => {
+    useArchiveSettings.setState({ autoArchive: false });
+    const user = await enterEditor();
+    await markDoneWithContent(user);
+
+    expect(await screen.findByText(/大纲节点「第1章 雪夜」可以标为完成/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '知道了' }));
+
+    expect(screen.queryByText(/可以标为完成/)).not.toBeInTheDocument();
+    const node = (await harness.repository.listOutline(novel.id)).find(
+      (item) => item.id === chapterNode.id,
+    );
+    expect(node?.status).not.toBe('done');
+  });
+
+  it('连点完成不会重复发起归档（module 级 in-flight 去重）', async () => {
+    useArchiveSettings.setState({ autoArchive: true });
+    let resolveFetch!: (value: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const fetchSpy = vi.fn(() => pending);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const user = await enterEditor();
+    await user.type(screen.getByLabelText('章节正文'), '雪落了整夜。');
+    await waitFor(() => expect(screen.getByText('已保存')).toBeInTheDocument(), { timeout: 3000 });
+
+    await user.click(screen.getByRole('button', { name: '草稿' }));
+    expect(await screen.findByText(/正在生成本章摘要与设定/)).toBeInTheDocument();
+    // 回到草稿再标完成：第一次请求还在飞，复用同一个 Promise，不重复计费
+    await user.click(screen.getByRole('button', { name: '已完成' }));
+    await user.click(screen.getByRole('button', { name: '草稿' }));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    resolveFetch(jsonResponse(completion(JSON.stringify(ARCHIVE_RESULT))));
+    expect(await screen.findByText(/本章摘要与设定已生成/)).toBeInTheDocument();
   });
 });

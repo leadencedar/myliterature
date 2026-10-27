@@ -79,6 +79,38 @@ const EXPAND_RESULT = {
   ],
 };
 
+/** extract-settings（M2 归档）的假输出：摘要 + 进展 + 2 个新人物条目（用于「N 条知识库更新」） */
+const EXTRACT_RESULT = {
+  entries: [
+    {
+      categoryName: '人物',
+      title: '船夫',
+      aliases: ['老艄公'],
+      summary: '夜渡的船夫，认得沈砚母亲的旧簪。',
+      fields: [
+        { key: 'identity', value: '渡口的老船夫，夜里摆渡二十年。' },
+        { key: 'relations', value: '认得沈砚母亲的旧簪，与青冥宗旧人有过往来。' },
+      ],
+    },
+    {
+      categoryName: '人物',
+      title: '茶博士',
+      aliases: [],
+      summary: '岸上茶棚的伙计，嘴碎，知道不少渡口旧事。',
+      fields: [{ key: 'identity', value: '岸上茶棚的伙计' }],
+    },
+  ],
+  summary: '沈砚以差事抵船资夜渡北上，船夫认出旧簪；裴照在旁试探青冥宗的旧事。',
+  keyEvents: ['沈砚以差事抵船资', '船夫认出旧簪', '裴照提到青冥宗'],
+  appearingEntries: ['沈砚', '裴照'],
+  newOpenThreads: ['旧簪的来历', '青冥宗是否还有人活着'],
+  resolvedThreads: [],
+  rollingSummary: '沈砚登船北上；旧簪与青冥宗两条线索同时浮出水面。',
+};
+
+/** 继续补写（S4）的假追加正文：约 2600 字，让目标 3000 字的章节补到 85% 以上 */
+const CONTINUE_TEXT = '船到河心，风更急了，沈砚压着斗笠没有说话。'.repeat(100);
+
 /** chapter-draft（流式）的假正文：约 700 字，末尾故意 finish_reason:"length" 演示截断 */
 const CHAPTER_TEXT = [
   '渡口的风比记忆里更冷。',
@@ -103,14 +135,16 @@ function sseFrame(payload) {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
-/** 把假正文拆成若干 delta 事件 + length 结束帧，模拟真实流式 */
-function buildChapterSse() {
+/** 把假正文拆成若干 delta 事件；finishReason 非空时追加结束帧，模拟真实流式 */
+function buildSse(text, finishReason) {
   const pieces = [];
-  for (let index = 0; index < CHAPTER_TEXT.length; index += 64) {
-    pieces.push(CHAPTER_TEXT.slice(index, index + 64));
+  for (let index = 0; index < text.length; index += 64) {
+    pieces.push(text.slice(index, index + 64));
   }
   const frames = pieces.map((piece) => sseFrame({ choices: [{ delta: { content: piece } }] }));
-  frames.push(sseFrame({ choices: [{ delta: {}, finish_reason: 'length' }] }));
+  if (finishReason) {
+    frames.push(sseFrame({ choices: [{ delta: {}, finish_reason: finishReason }] }));
+  }
   frames.push('data: [DONE]\n\n');
   return frames.join('');
 }
@@ -151,18 +185,26 @@ async function installModelMock(page, mockLog) {
     });
     log(
       'mock',
-      stream ? '流式请求（chapter-draft）' : '结构化请求（outline-expand）',
+      stream ? '流式请求（chapter-draft / 继续补写）' : '结构化请求（outline-expand / extract-settings）',
       `model=${body.model ?? '?'} max_tokens=${body.max_tokens ?? '无'} response_format=${body.response_format?.type ?? '无'} messages=${JSON.stringify(
         (body.messages ?? []).map((message) => `${message.role}:${String(message.content ?? '').length}字`),
       )}`,
     );
+    const messages = Array.isArray(body.messages) ? body.messages : [];
+    const lastUserText = messages.filter((message) => message.role === 'user').pop()?.content ?? '';
     if (stream) {
+      // 生成本章 = 2 条 messages（system+user）；继续补写 = 4 条（多 assistant 正文与续写指令）
+      const isContinue = messages.length >= 4;
       return route.fulfill({
         status: 200,
         headers: { ...corsHeaders(), 'content-type': 'text/event-stream; charset=utf-8' },
-        body: buildChapterSse(),
+        body: isContinue
+          ? buildSse(CONTINUE_TEXT, null)
+          : buildSse(CHAPTER_TEXT, 'length'),
       });
     }
+    const isExpand = String(lastUserText).includes('要拆分的节点');
+    const payload = isExpand ? EXPAND_RESULT : EXTRACT_RESULT;
     return route.fulfill({
       status: 200,
       headers: { ...corsHeaders(), 'content-type': 'application/json; charset=utf-8' },
@@ -174,7 +216,7 @@ async function installModelMock(page, mockLog) {
         choices: [
           {
             index: 0,
-            message: { role: 'assistant', content: JSON.stringify(EXPAND_RESULT) },
+            message: { role: 'assistant', content: JSON.stringify(payload) },
             finish_reason: 'stop',
           },
         ],
@@ -406,6 +448,19 @@ async function main() {
       });
       await repo.updateChapter(doneChapter.id, { status: 'done' });
 
+      // S4 演示用的第三章（草稿、有旧稿正文）：生成短稿 → 差额 → 继续补写
+      const continueNode = await repo.createOutlineNode(novel.id, {
+        title: '第3章 灯下',
+        synopsis: '岸上茶棚里有人认出了旧簪。',
+        parentId: secondVolume.id,
+        targetWords: 3000,
+      });
+      const continueChapter = await repo.createChapter(novel.id, {
+        title: '灯下',
+        content: '灯下的旧稿：有人在茶棚里提起旧簪。',
+        outlineNodeId: continueNode.id,
+      });
+
       return {
         novelId: novel.id,
         entryIds: { shen: shen.id, pei: pei.id, rule: rule.id },
@@ -415,15 +470,17 @@ async function main() {
           chapterNode: chapterNode.id,
           doneVolume: doneVolume.id,
           doneNode: doneNode.id,
+          continueNode: continueNode.id,
         },
         chapterId: chapter.id,
         doneChapterId: doneChapter.id,
+        continueChapterId: continueChapter.id,
       };
     });
     log(
       '01',
       '种子数据完成',
-      `小说《归墟纪》 条目 3 条（含 pinned 世界观）、卷 3 个、章节点 2 个（6000/3000 字）、章节 2 章（1 草稿 + 1 已完成）`,
+      `小说《归墟纪》 条目 3 条（含 pinned 世界观）、卷 3 个、章节点 3 个、章节 3 章（2 草稿 + 1 已完成）`,
     );
 
     // active novel 写入 localStorage（zustand persist），再进写作页
@@ -557,11 +614,93 @@ async function main() {
     await desktopDialog.getByText('本次注入').scrollIntoViewIfNeeded();
     await shot(page, '16', 'after-11-node-sheet-desktop.png', '1280×800 节点抽屉（右侧抽屉）+ 本次注入');
 
+
+    // ================================================================
+    // M2 体验（task-23）：归档状态行 / 查看 inbox / 采用本批档案 / 设置开关 / S4 继续补写
+    // ================================================================
+
+    // 10) 移动端：第 1 章标记完成 → 后台归档状态行 → 查看 → 采用本批档案
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${BASE}/write`, { waitUntil: 'load' });
+    await page.getByRole('button', { name: '继续写第 1 章' }).click();
+    await page.getByRole('button', { name: '生成本章' }).waitFor({ state: 'visible', timeout: 15_000 });
+    log('17', 'M2：打开第 1 章并标记完成', 'draft→done 应触发后台归档（不弹 Sheet）');
+    await page.getByRole('button', { name: '草稿' }).click();
+    await waitText(page, '本章摘要与设定已生成', 20_000);
+    log('18', '后台归档完成（无 Sheet 弹出）', await visibleText(page.getByRole('status').first(), 300));
+    await shot(page, '17', 'm2-01-archive-status-mobile.png', 'M2：本章摘要与设定已生成 + 查看（不阻塞编辑）');
+
+    await page.getByRole('button', { name: '查看' }).click();
+    const inboxDialog = page.getByRole('dialog', { name: '本章摘要与设定待确认' });
+    await inboxDialog.waitFor({ state: 'visible', timeout: 10_000 });
+    log('19', '打开「本章摘要与设定待确认」', await visibleText(inboxDialog, 900));
+    await shot(page, '18', 'm2-02-archive-inbox-mobile.png', 'M2：本章摘要与设定待确认（摘要/进展/条目）');
+    await inboxDialog.getByRole('button', { name: /采用本批档案/u }).click();
+    await inboxDialog.waitFor({ state: 'hidden', timeout: 10_000 });
+    await page.getByText('本章摘要与设定已生成').waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => {});
+    log('20', '采用本批档案', '摘要/进展/条目落库；状态行清空');
+    await shot(page, '19', 'm2-03-archive-accepted-mobile.png', 'M2：采用本批档案后状态行清空');
+
+    // 10b) 桌面：第 2 章完成 → 后台归档 → 查看（桌面各一张）
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${BASE}/write`, { waitUntil: 'load' });
+    await page.getByRole('button', { name: '继续写第 2 章' }).click();
+    await page.getByRole('button', { name: '生成本章' }).waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByRole('button', { name: '草稿' }).click();
+    await waitText(page, '本章摘要与设定已生成', 20_000);
+    await shot(page, '20', 'm2-04-archive-status-desktop.png', 'M2 桌面：本章摘要与设定已生成 + 查看');
+    await page.getByRole('button', { name: '查看' }).click();
+    const desktopInbox = page.getByRole('dialog', { name: '本章摘要与设定待确认' });
+    await desktopInbox.waitFor({ state: 'visible', timeout: 10_000 });
+    await shot(page, '21', 'm2-05-archive-inbox-desktop.png', 'M2 桌面：本章摘要与设定待确认');
+    await desktopInbox.getByRole('button', { name: /采用本批档案/u }).click();
+    await desktopInbox.waitFor({ state: 'hidden', timeout: 10_000 });
+    log('21', '桌面归档批次已采用', '');
+
+    // 10c) 设置页关闭自动归档 → 第 3 章完成只提示可手动补摘要
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${BASE}/settings`, { waitUntil: 'load' });
+    const archiveToggle = page.getByLabel('完成后自动生成本章档案');
+    await archiveToggle.waitFor({ state: 'visible', timeout: 15_000 });
+    // 设置页很长：显式滚动到「写作辅助」区块，并记录 scrollY 以便排查
+    await page.getByText('写作辅助').evaluate((element) => element.scrollIntoView({ block: 'center' }));
+    await page.waitForTimeout(500);
+    log('22a', '设置页滚动位置', `scrollY=${await page.evaluate(() => window.scrollY)}`);
+    await shot(page, '22', 'm2-06-settings-helper-mobile.png', 'M2：设置页「写作辅助」开关 + 成本说明');
+    await archiveToggle.uncheck();
+    log('22', '关闭「完成后自动生成本章档案」', '');
+
+    await page.goto(`${BASE}/write`, { waitUntil: 'load' });
+    await page.getByRole('button', { name: '继续写第 3 章' }).click();
+    await page.getByRole('button', { name: '生成本章' }).waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByRole('button', { name: '草稿' }).click();
+    await waitText(page, '自动归档已关闭', 10_000);
+    log('23', 'autoArchive=false：标记完成不调用模型', await visibleText(page.getByRole('status').first(), 200));
+    await shot(page, '23', 'm2-07-autoarchive-off-mobile.png', 'M2：自动归档关闭；可手动补摘要');
+
+    // 10d) S4：短稿差额提示 → 继续补写 → 追加后提示消失
+    await page.getByRole('button', { name: '生成本章' }).click();
+    await waitText(page, '本次注入');
+    const startThird = page.getByRole('button', { name: '开始生成' });
+    await startThird.scrollIntoViewIfNeeded();
+    await startThird.click({ timeout: 20_000 });
+    await waitText(page, '生成被截断', 20_000);
+    await waitText(page, '比目标少约', 10_000);
+    log('24', 'S4：短稿/截断出现差额提示', await visibleText(page.getByText(/比目标少约/u).first(), 200));
+    await shot(page, '24', 'm2-08-continue-prompt-mobile.png', 'M2-S4：比目标少约 X 字 + 继续补写');
+    const continueButton = page.getByRole('button', { name: '继续补写' });
+    await continueButton.scrollIntoViewIfNeeded();
+    await continueButton.click();
+    // 假流式立即返回约 2600 字：等「比目标少约」消失，证明补到 85% 以上
+    await page.getByText(/比目标少约/u).waitFor({ state: 'hidden', timeout: 15_000 });
+    log('25', 'S4：继续补写完成，差额提示消失', await visibleText(page.getByRole('dialog', { name: '生成本章正文' }), 500));
+    await shot(page, '25', 'm2-09-continue-result-mobile.png', 'M2-S4：补写已追加；达到目标后提示消失');
+
     // 9) 汇总
     log(
-      '14',
+      '26',
       '走查完成',
-      `after 截图 11 张；mock 请求 ${mockLog.length} 次（stream: ${mockLog.filter((item) => item.stream).length}）；页面异常 ${pageErrors.length} 个`,
+      `after 截图 11 张 + M2 截图 9 张；mock 请求 ${mockLog.length} 次（stream: ${mockLog.filter((item) => item.stream).length}）；页面异常 ${pageErrors.length} 个`,
     );
 
     writeFileSync(join(SHOTS_DIR, 'walkthrough-data.json'), `${JSON.stringify({ seed, mockLog, pageErrors, transcript }, null, 2)}\n`);
