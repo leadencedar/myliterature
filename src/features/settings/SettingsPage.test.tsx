@@ -191,10 +191,10 @@ describe('设置页 · 写作辅助', () => {
   it('默认开启自动归档与条目提取，并说明成本', () => {
     render(<SettingsPage />);
 
-    expect(screen.getByLabelText('完成后自动生成本章档案')).toBeChecked();
+    expect(screen.getByLabelText('完成后自动生成本章摘要与设定')).toBeChecked();
     expect(screen.getByLabelText('归档时提取知识库条目')).toBeChecked();
     expect(screen.getByText(/每章归档 1 次结构化调用/u)).toBeInTheDocument();
-    expect(screen.getByText(/摘要与知识库更新，可关条目/u)).toBeInTheDocument();
+    expect(screen.getByText(/摘要与进展必生成，知识库条目可关/u)).toBeInTheDocument();
     expect(screen.getByText(/摘要与进展是摘要链的来源，必须生成/u)).toBeInTheDocument();
   });
 
@@ -202,7 +202,7 @@ describe('设置页 · 写作辅助', () => {
     const user = userEvent.setup();
     render(<SettingsPage />);
 
-    await user.click(screen.getByLabelText('完成后自动生成本章档案'));
+    await user.click(screen.getByLabelText('完成后自动生成本章摘要与设定'));
     expect(useArchiveSettings.getState().autoArchive).toBe(false);
     await user.click(screen.getByLabelText('归档时提取知识库条目'));
     expect(useArchiveSettings.getState().extractEntries).toBe(false);

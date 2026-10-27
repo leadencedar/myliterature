@@ -616,10 +616,10 @@ async function main() {
 
 
     // ================================================================
-    // M2 体验（task-23）：归档状态行 / 查看 inbox / 采用本批档案 / 设置开关 / S4 继续补写
+    // M2 体验（task-23）：归档状态行 / 查看 inbox / 采用本批 / 设置开关 / S4 继续补写
     // ================================================================
 
-    // 10) 移动端：第 1 章标记完成 → 后台归档状态行 → 查看 → 采用本批档案
+    // 10) 移动端：第 1 章标记完成 → 后台归档状态行 → 查看 → 采用本批
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${BASE}/write`, { waitUntil: 'load' });
     await page.getByRole('button', { name: '继续写第 1 章' }).click();
@@ -635,11 +635,11 @@ async function main() {
     await inboxDialog.waitFor({ state: 'visible', timeout: 10_000 });
     log('19', '打开「本章摘要与设定待确认」', await visibleText(inboxDialog, 900));
     await shot(page, '18', 'm2-02-archive-inbox-mobile.png', 'M2：本章摘要与设定待确认（摘要/进展/条目）');
-    await inboxDialog.getByRole('button', { name: /采用本批档案/u }).click();
+    await inboxDialog.getByRole('button', { name: /采用本批/u }).click();
     await inboxDialog.waitFor({ state: 'hidden', timeout: 10_000 });
     await page.getByText('本章摘要与设定已生成').waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => {});
-    log('20', '采用本批档案', '摘要/进展/条目落库；状态行清空');
-    await shot(page, '19', 'm2-03-archive-accepted-mobile.png', 'M2：采用本批档案后状态行清空');
+    log('20', '采用本批', '摘要/进展/条目落库；状态行清空');
+    await shot(page, '19', 'm2-03-archive-accepted-mobile.png', 'M2：采用本批后状态行清空');
 
     // 10b) 桌面：第 2 章完成 → 后台归档 → 查看（桌面各一张）
     await page.setViewportSize({ width: 1280, height: 800 });
@@ -653,14 +653,14 @@ async function main() {
     const desktopInbox = page.getByRole('dialog', { name: '本章摘要与设定待确认' });
     await desktopInbox.waitFor({ state: 'visible', timeout: 10_000 });
     await shot(page, '21', 'm2-05-archive-inbox-desktop.png', 'M2 桌面：本章摘要与设定待确认');
-    await desktopInbox.getByRole('button', { name: /采用本批档案/u }).click();
+    await desktopInbox.getByRole('button', { name: /采用本批/u }).click();
     await desktopInbox.waitFor({ state: 'hidden', timeout: 10_000 });
     log('21', '桌面归档批次已采用', '');
 
     // 10c) 设置页关闭自动归档 → 第 3 章完成只提示可手动补摘要
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${BASE}/settings`, { waitUntil: 'load' });
-    const archiveToggle = page.getByLabel('完成后自动生成本章档案');
+    const archiveToggle = page.getByLabel('完成后自动生成本章摘要与设定');
     await archiveToggle.waitFor({ state: 'visible', timeout: 15_000 });
     // 设置页很长：显式滚动到「写作辅助」区块，并记录 scrollY 以便排查
     await page.getByText('写作辅助').evaluate((element) => element.scrollIntoView({ block: 'center' }));
@@ -668,7 +668,7 @@ async function main() {
     log('22a', '设置页滚动位置', `scrollY=${await page.evaluate(() => window.scrollY)}`);
     await shot(page, '22', 'm2-06-settings-helper-mobile.png', 'M2：设置页「写作辅助」开关 + 成本说明');
     await archiveToggle.uncheck();
-    log('22', '关闭「完成后自动生成本章档案」', '');
+    log('22', '关闭「完成后自动生成本章摘要与设定」', '');
 
     await page.goto(`${BASE}/write`, { waitUntil: 'load' });
     await page.getByRole('button', { name: '继续写第 3 章' }).click();

@@ -28,22 +28,22 @@ describe('M2-S5 · 写作辅助设置', () => {
     harness.renderUI(<SettingsPage />);
     expect(await screen.findByText('写作辅助')).toBeInTheDocument();
 
-    const autoArchive = screen.getByLabelText('完成后自动生成本章档案') as HTMLInputElement;
+    const autoArchive = screen.getByLabelText('完成后自动生成本章摘要与设定') as HTMLInputElement;
     const extractEntries = screen.getByLabelText('归档时提取知识库条目') as HTMLInputElement;
     expect(autoArchive.checked).toBe(true);
     expect(extractEntries.checked).toBe(true);
 
     expect(screen.getByText(/每章归档 1 次结构化调用/u)).toBeInTheDocument();
     expect(screen.getByText(/摘要与进展是摘要链的来源，必须生成/u)).toBeInTheDocument();
-    // 说明「不弹窗、不阻塞」的交互预期；task-28 补了「摘要与知识库更新，可关条目」
+    // 说明「不弹窗、不阻塞」的交互预期；task-30 明确「摘要与进展必生成，知识库条目可关」
     expect(screen.getByText(/不弹窗、不阻塞写作/u)).toBeInTheDocument();
-    expect(screen.getByText(/摘要与知识库更新，可关条目/u)).toBeInTheDocument();
+    expect(screen.getByText(/摘要与进展必生成，知识库条目可关/u)).toBeInTheDocument();
   });
 
   it('关闭自动归档：store 更新并持久化到 localStorage', async () => {
     harness.renderUI(<SettingsPage />);
     const user = userEvent.setup();
-    const toggle = await screen.findByLabelText('完成后自动生成本章档案');
+    const toggle = await screen.findByLabelText('完成后自动生成本章摘要与设定');
 
     await user.click(toggle);
 
@@ -69,7 +69,7 @@ describe('M2-S5 · 写作辅助设置', () => {
     const parsed = JSON.parse(raw!) as { state: { autoArchive: boolean; extractEntries: boolean } };
     expect(parsed.state).toMatchObject({ autoArchive: true, extractEntries: false });
 
-    await user.click(screen.getByLabelText('完成后自动生成本章档案'));
+    await user.click(screen.getByLabelText('完成后自动生成本章摘要与设定'));
     const after = JSON.parse(localStorage.getItem('myliterature.archive-settings')!) as {
       state: { autoArchive: boolean; extractEntries: boolean };
     };

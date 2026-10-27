@@ -173,8 +173,8 @@ export function SettingsPage() {
         description="与章节完成相关的自动化设置。AI 产出仍然一律先变成待确认提案，不会自动写入。"
       >
         <Toggle
-          label="完成后自动生成本章档案"
-          description="标记章节「已完成」时在后台生成摘要、进展与知识库条目提案（摘要与知识库更新，可关条目），不弹窗、不阻塞写作；在编辑器状态行点「查看」确认。"
+          label="完成后自动生成本章摘要与设定"
+          description="标记章节「已完成」时在后台生成摘要、进展与知识库条目提案（摘要与进展必生成，知识库条目可关），不弹窗、不阻塞写作；在编辑器状态行点「查看」确认。"
           checked={archive.autoArchive}
           onChange={(value) => archive.update({ autoArchive: value })}
         />

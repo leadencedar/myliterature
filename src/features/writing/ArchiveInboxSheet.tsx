@@ -33,7 +33,7 @@ export function ArchiveInboxSheet({
         <ProposalInbox
           novelId={novelId}
           batchId={batchId}
-          acceptAllLabel="采用本批档案"
+          acceptAllLabel="采用本批"
           defaultExpandFirst={false}
           onSettled={onSettled}
         />

@@ -743,8 +743,8 @@ export function ChapterEditorScreen({
                   <span className="flex-1">
                     本章摘要与设定已生成：
                     {archiveState.pendingCount > 0
-                      ? `摘要 + ${archiveState.pendingCount} 条知识库更新待确认`
-                      : '摘要与进展待确认'}
+                      ? `${archiveState.pendingCount} 条知识库更新待确认`
+                      : '待确认'}
                     {archiveState.entriesDegraded ? '（知识库条目本轮未生成）' : ''}
                   </span>
                   <button

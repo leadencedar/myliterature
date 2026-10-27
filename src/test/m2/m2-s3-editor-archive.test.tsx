@@ -150,7 +150,7 @@ describe('M2-S3 · 标记完成触发后台归档（不弹 Sheet、不阻塞）'
     await markDone(user);
 
     expect(await screen.findByText(DONE_ROW)).toBeInTheDocument();
-    expect(screen.getByText(/摘要 \+ 2 条知识库更新待确认/u)).toBeInTheDocument();
+    expect(screen.getByText(/2 条知识库更新待确认/u)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '查看' })).toBeInTheDocument();
     // 不自动弹任何 Sheet
     expect(screen.queryByRole('dialog', { name: '本章摘要' })).not.toBeInTheDocument();
@@ -183,7 +183,7 @@ describe('M2-S3 · 查看 inbox：关闭不写、采用才落库', () => {
 
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
-    expect(within(dialog).getByRole('button', { name: /采用本批档案/u })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /采用本批/u })).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: '关闭' }));
     await waitFor(() =>
       expect(
@@ -207,7 +207,7 @@ describe('M2-S3 · 查看 inbox：关闭不写、采用才落库', () => {
 
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
-    await user.click(within(dialog).getByRole('button', { name: /采用本批档案/u }));
+    await user.click(within(dialog).getByRole('button', { name: /采用本批/u }));
 
     await waitFor(() =>
       expect(
@@ -273,6 +273,17 @@ describe('M2-S3 · 设置/配置边界', () => {
   });
 });
 
+describe('M2-S3 · 状态行 N=0 文案（task-30）', () => {
+  it('条目无变化时状态行显示「本章摘要与设定已生成：待确认」', async () => {
+    stubApi({ entriesCount: 0 });
+    const user = await enterEditor();
+    await markDone(user);
+
+    expect(await screen.findByText('本章摘要与设定已生成：待确认')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看' })).toBeInTheDocument();
+  });
+});
+
 describe('M2-S3 · 挂载恢复（不重跑）', () => {
   it('打开已有本章 pending 档案的已完成章节：显示待确认 + 查看，不发新请求', async () => {
     const { getNonStreamCalls } = stubApi();
@@ -330,7 +341,7 @@ describe('M2-S3 · 挂载恢复（不重跑）', () => {
 
     const user = await enterEditor();
     expect(await screen.findByText(DONE_ROW)).toBeInTheDocument();
-    expect(screen.getByText(/摘要 \+ 1 条知识库更新待确认/u)).toBeInTheDocument();
+    expect(screen.getByText(/1 条知识库更新待确认/u)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '查看' }));
     expect(await screen.findByRole('dialog', { name: '本章摘要与设定待确认' })).toBeInTheDocument();
     expect(getNonStreamCalls()).toBe(0); // 只读恢复，不重跑

@@ -304,6 +304,58 @@ describe('M2-S4 · 继续补写请求体与追加', () => {
   });
 });
 
+describe('M2-S4 · 结果标题三档（task-30 文案 + task-38 修正）', () => {
+  it('<85%（完整但很短）：标题「生成完成（接近目标）」+ 差额 + 继续补写块', async () => {
+    const { context } = await setupChapter(6000);
+    stubLlm([{ deltas: ['完整但很短的一章。'] }]); // 完整结束（无 finishReason），字数远低于 85%
+    const { user } = renderSheet(context);
+    await startGeneration(user);
+
+    expect(screen.getByText('生成完成（接近目标）')).toBeInTheDocument();
+    expect(screen.getByText('还有场景没落地？')).toBeInTheDocument();
+    expect(screen.getByText(/比目标少约 \d+ 字。/u)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '继续补写' })).toBeInTheDocument();
+  });
+
+  it('85%–100%（2700/3000）：标题「生成完成（接近目标）」，但**不出补写块**', async () => {
+    const { context } = await setupChapter(3000);
+    // 完整结束、2700 字 = 90%（≥85% 但不达标）
+    stubLlm([{ deltas: ['字'.repeat(2700)] }]);
+    const { user } = renderSheet(context);
+    await startGeneration(user);
+
+    expect(headerWords()).toBe(2700);
+    expect(screen.getByText('生成完成（接近目标）')).toBeInTheDocument();
+    expect(screen.queryByText('还有场景没落地？')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '继续补写' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/比目标少约/u)).not.toBeInTheDocument();
+  });
+
+  it('≥100%（3100/3000）：纯「生成完成」，不加「接近目标」也不出补写块', async () => {
+    const { context } = await setupChapter(3000);
+    stubLlm([{ deltas: ['字'.repeat(3100)] }]);
+    const { user } = renderSheet(context);
+    await startGeneration(user);
+
+    expect(headerWords()).toBe(3100);
+    expect(screen.getByText('生成完成')).toBeInTheDocument();
+    expect(screen.queryByText('生成完成（接近目标）')).not.toBeInTheDocument();
+    expect(screen.queryByText('还有场景没落地？')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '继续补写' })).not.toBeInTheDocument();
+  });
+
+  it('85% 边界（=2550）：标题「接近目标」但不出补写块', async () => {
+    const { context } = await setupChapter(3000);
+    stubLlm([{ deltas: ['字'.repeat(2550)] }]); // 恰好 85%
+    const { user } = renderSheet(context);
+    await startGeneration(user);
+
+    expect(headerWords()).toBe(2550);
+    expect(screen.getByText('生成完成（接近目标）')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '继续补写' })).not.toBeInTheDocument();
+  });
+});
+
 describe('M2-S4 · 续写截断/中止语义', () => {
   it('续写被截断：仍标「生成未完成」且可再次补写（第三次请求按剩余 300 字推导 4096 下限）', async () => {
     const { context } = await setupChapter(3000);

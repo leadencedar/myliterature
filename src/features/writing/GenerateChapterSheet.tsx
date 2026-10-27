@@ -367,10 +367,9 @@ export function GenerateChapterSheet({
     phase.kind === 'done' &&
     (phase.incomplete !== undefined || generatedWords < targetWords * SHORTFALL_RATIO);
   const remainingWords = Math.max(0, targetWords - generatedWords);
+  // 红框里已经写了「继续补写/重新生成」两条路，这里只留差额事实，避免同屏重复
   const shortfallMessage =
-    remainingWords > 0
-      ? `比目标少约 ${remainingWords} 字；可以继续补写未落地场景，或重新生成。`
-      : '生成未完成；可以继续补写未落地场景，或重新生成。';
+    remainingWords > 0 ? `比目标少约 ${remainingWords} 字。` : '生成未完成。';
 
   return (
     <>
@@ -519,7 +518,9 @@ export function GenerateChapterSheet({
                   ? '正在写…'
                   : phase.incomplete
                     ? '生成未完成'
-                    : '生成完成'}
+                    : remainingWords > 0
+                      ? '生成完成（接近目标）'
+                      : '生成完成'}
               </p>
               {/* 结果旁边直接给出「已生成 / 目标」对照：截断时作者才知道差了多少 */}
               <p className="text-xs text-ink-500">

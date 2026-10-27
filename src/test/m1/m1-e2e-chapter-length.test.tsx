@@ -279,7 +279,7 @@ describe('指标 4 · finishReason=null 视为未知（不误报）', () => {
     const { user, onAccept } = renderSheet();
     await startGeneration(user);
 
-    expect(screen.getByText('生成完成')).toBeInTheDocument();
+    expect(screen.getByText(/生成完成/u)).toBeInTheDocument();
     expect(screen.getByText(/\d+ 字 \/ 目标 6000 字/u)).toBeInTheDocument();
     expect(screen.queryByText(/生成被截断/u)).not.toBeInTheDocument();
     expect(screen.queryByText(/生成已中断/u)).not.toBeInTheDocument();
@@ -303,7 +303,7 @@ describe('400 max_tokens 回退（design §8.2）', () => {
     expect(bodies[0]!.max_tokens).toBe(8192);
     expect(bodies[1]!.max_tokens).toBeUndefined(); // 重试不带 max_tokens
     expect(screen.getByDisplayValue('重试成功的正文。')).toBeInTheDocument();
-    expect(screen.getByText('生成完成')).toBeInTheDocument();
+    expect(screen.getByText(/生成完成/u)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '采用为正文' }));
     await waitFor(() => expect(onAccept).toHaveBeenCalledWith('重试成功的正文。', 'replace'));

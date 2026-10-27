@@ -1082,7 +1082,7 @@ describe('标记完成后的后台归档（S3）', () => {
 
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
-    expect(within(dialog).getByRole('button', { name: /采用本批档案/u })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /采用本批/u })).toBeInTheDocument();
 
     // 关闭不写任何东西
     await user.click(within(dialog).getByRole('button', { name: '关闭' }));
@@ -1100,7 +1100,7 @@ describe('标记完成后的后台归档（S3）', () => {
 
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
-    await user.click(within(dialog).getByRole('button', { name: /采用本批档案/u }));
+    await user.click(within(dialog).getByRole('button', { name: /采用本批/u }));
 
     const chapterId = (await harness.repository.listChapters(novel.id))[0]!.id;
     await waitFor(async () => {

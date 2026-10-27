@@ -173,7 +173,8 @@ describe('截断与中断防线（US-4）', () => {
     const { user, onAccept } = renderSheet();
     await generate(user);
 
-    expect(screen.getByText('生成完成')).toBeInTheDocument();
+    // 完整但只写了几十字：标题带上「接近目标」，不误导成写满了
+    expect(screen.getByText('生成完成（接近目标）')).toBeInTheDocument();
     expect(screen.getByText('4 字 / 目标 6000 字')).toBeInTheDocument();
     expect(screen.queryByText(/生成被截断/u)).not.toBeInTheDocument();
 
@@ -275,7 +276,7 @@ describe('400 max_tokens 兼容回退', () => {
     expect(bodies[1]).not.toHaveProperty('max_tokens');
     // 第一次请求在出字前就被拒，重试后正文只出现一遍
     expect(screen.getByLabelText('生成结果（可直接修改）')).toHaveValue('重试后的正文');
-    expect(screen.getByText('生成完成')).toBeInTheDocument();
+    expect(screen.getByText('生成完成（接近目标）')).toBeInTheDocument();
   });
 
   it('与 max_tokens 无关的 400 不静默重试，照常报错', async () => {
@@ -336,10 +337,10 @@ describe('生成差额与手动继续补写（S4）', () => {
     const { user } = renderSheet();
     await generate(user);
 
+    // 50%：完整但离目标远，标题也要如实标记「接近目标」而不是「生成完成」
+    expect(screen.getByText('生成完成（接近目标）')).toBeInTheDocument();
     expect(screen.getByText('还有场景没落地？')).toBeInTheDocument();
-    expect(
-      screen.getByText('比目标少约 3000 字；可以继续补写未落地场景，或重新生成。'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('比目标少约 3000 字。')).toBeInTheDocument();
     expect(
       screen.getByText(/节拍已齐可直接标完成。补写只补本章还没落地的场景/u),
     ).toBeInTheDocument();
@@ -375,6 +376,44 @@ describe('生成差额与手动继续补写（S4）', () => {
     );
     // 按剩余 3000 字推导：ceil(3000×1.8)+800=6200，而不是整章目标推导的 8192
     expect(body.max_tokens).toBe(6200);
+  });
+
+  it('完整但略低于目标（90%）：标题「接近目标」，不弹补写块', async () => {
+    const nineTenths = await harness.repository.createOutlineNode(context.novel.id, {
+      title: '第3章 九成',
+      parentId: volume.id,
+      targetWords: 3000,
+    });
+    // 2700/3000 = 90%：已经算写够了（不弹补写），但还没到目标，标题要如实说明
+    stubSequence([{ deltas: ['字'.repeat(2700)] }]);
+    const { user } = renderSheet({
+      outline: [...context.outline, nineTenths],
+      targetNodeId: nineTenths.id,
+    });
+    await generate(user);
+
+    expect(screen.getByText('生成完成（接近目标）')).toBeInTheDocument();
+    expect(screen.queryByText('还有场景没落地？')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '继续补写' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/比目标少约/u)).not.toBeInTheDocument();
+  });
+
+  it('完整且达到目标（100%）：标题是「生成完成」', async () => {
+    const exactly = await harness.repository.createOutlineNode(context.novel.id, {
+      title: '第4章 足额',
+      parentId: volume.id,
+      targetWords: 100,
+    });
+    stubSequence([{ deltas: ['字'.repeat(100)] }]);
+    const { user } = renderSheet({
+      outline: [...context.outline, exactly],
+      targetNodeId: exactly.id,
+    });
+    await generate(user);
+
+    expect(screen.getByText('生成完成')).toBeInTheDocument();
+    expect(screen.queryByText('还有场景没落地？')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '继续补写' })).not.toBeInTheDocument();
   });
 
   it('补写到目标 85% 以上后差额提示消失', async () => {
