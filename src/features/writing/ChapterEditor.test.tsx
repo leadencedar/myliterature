@@ -6,7 +6,7 @@ import { toLocalDate } from '@/domain/primitives';
 import type { Category, Novel, OutlineNode } from '@/domain/schema';
 import { useLlmSettings } from '@/llm/settingsStore';
 import { completion, jsonResponse, sseResponse, textDeltaEvents } from '@/test/llmFixtures';
-import { buildCreateProposal } from '@/proposal/build';
+import { buildCreateProposal, buildReplaceProposal } from '@/proposal/build';
 import { fieldSpecsFor } from '@/proposal/fields';
 import { createTestHarness, type TestHarness } from '@/test/renderWithProviders';
 import { useArchiveSettings } from './archiveSettings';
@@ -1073,6 +1073,8 @@ describe('标记完成后的后台归档（S3）', () => {
     // design §6.6：不再自动弹摘要面板
     expect(screen.queryByRole('dialog', { name: '本章摘要' })).not.toBeInTheDocument();
     expect(await screen.findByText(/本章摘要与设定已生成/)).toBeInTheDocument();
+    // M2.1：摘要 create + 进展 replace = 2 项，计数要说全
+    expect(screen.getByText(/2 项待确认（含摘要、进展、条目）/)).toBeInTheDocument();
     expect(bodies).toHaveLength(1);
     // 归档用的是编辑器里的最新正文，不必等防抖保存
     const body = bodies[0] as { messages: { role: string; content: string }[] };
@@ -1083,6 +1085,11 @@ describe('标记完成后的后台归档（S3）', () => {
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
     expect(within(dialog).getByRole('button', { name: /采用本批/u })).toBeInTheDocument();
+    // M2.1-S2b：进展 replace 不再默认忽略（每章都有，否则摘要链会漏），无「默认不选」提示
+    expect(within(dialog).queryByText(/本批含/u)).not.toBeInTheDocument();
+    expect(within(dialog).getByText('本批伏笔流水')).toBeInTheDocument();
+    expect(within(dialog).getByText(/第 1 章：新埋 1 \/ 收束 0 \/ 现存 1/u)).toBeInTheDocument();
+    expect(within(dialog).getByText(/若误收束，在摘要的「未收束伏笔」里加回/u)).toBeInTheDocument();
 
     // 关闭不写任何东西
     await user.click(within(dialog).getByRole('button', { name: '关闭' }));
@@ -1091,7 +1098,7 @@ describe('标记完成后的后台归档（S3）', () => {
     expect((await harness.repository.getNovel(novel.id))?.rollingSummary).toBe('');
   });
 
-  it('采用本批档案后摘要与进展落库，状态行清空', async () => {
+  it('普通归档批次默认两项都选中，采用本批后摘要与进展都更新', async () => {
     useArchiveSettings.setState({ autoArchive: true });
     stubArchive();
     const user = await enterEditor();
@@ -1100,7 +1107,9 @@ describe('标记完成后的后台归档（S3）', () => {
 
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
-    await user.click(within(dialog).getByRole('button', { name: /采用本批/u }));
+    // 摘要 create + 进展 replace 都默认选中（安全默认只针对已有知识条目）
+    expect(within(dialog).queryByText('已标记为忽略')).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: /采用本批（2）/ }));
 
     const chapterId = (await harness.repository.listChapters(novel.id))[0]!.id;
     await waitFor(async () => {
@@ -1109,7 +1118,127 @@ describe('标记完成后的后台归档（S3）', () => {
       });
     });
     expect((await harness.repository.getNovel(novel.id))?.rollingSummary).toBe('截至本章的进展。');
+    expect(await harness.repository.listProposals(novel.id, { status: 'pending' })).toHaveLength(0);
     await waitFor(() => expect(screen.queryByText(/本章摘要与设定已生成/)).not.toBeInTheDocument());
+  });
+
+  it('已有摘要时 replace 默认选中：采用本批后旧摘要被更新', async () => {
+    useArchiveSettings.setState({ autoArchive: true });
+    // 先建好本章与旧摘要，归档会产出「摘要 replace + 进展 replace」两项
+    const existing = await harness.repository.createChapter(novel.id, {
+      title: '第1章 雪夜',
+      content: '雪落了整夜。',
+      outlineNodeId: chapterNode.id,
+    });
+    await harness.repository.upsertSummary(novel.id, existing.id, {
+      summary: '旧摘要',
+      keyEvents: ['旧事件'],
+    });
+    stubArchive();
+    const user = await enterEditor();
+    await user.click(screen.getByRole('button', { name: '草稿' }));
+    await screen.findByText(/本章摘要与设定已生成/);
+
+    await user.click(screen.getByRole('button', { name: '查看' }));
+    const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
+    // 摘要/进展的 replace 不是「已有知识条目」，默认选中
+    expect(within(dialog).queryByText('已标记为忽略')).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: /采用本批（2）/ }));
+
+    await waitFor(async () => {
+      expect(await harness.repository.getSummaryByChapter(existing.id)).toMatchObject({
+        summary: '本章摘要。',
+      });
+    });
+    expect((await harness.repository.getNovel(novel.id))?.rollingSummary).toBe('截至本章的进展。');
+    expect(await harness.repository.listProposals(novel.id, { status: 'pending' })).toHaveLength(0);
+  });
+
+  /** 造一个「归档会合并已有条目」的批次：预建裴照 + extract 返回同名变更 */
+  async function seedMergeArchive() {
+    const existingEntry = await harness.repository.createEntry(novel.id, {
+      categoryId: charCategory.id,
+      title: '裴照',
+      summary: '旧识',
+      fields: { identity: '旧身份' },
+    });
+    stubArchive({
+      entries: [
+        {
+          categoryName: '人物',
+          title: '裴照',
+          aliases: [],
+          summary: '旧识',
+          fields: [{ key: 'identity', value: '新身份' }],
+        },
+      ],
+      summary: '本章摘要。',
+      keyEvents: ['事件'],
+      appearingEntries: ['裴照'],
+      newOpenThreads: ['新伏笔'],
+      resolvedThreads: ['旧伏笔'],
+      rollingSummary: '截至本章的进展。',
+    });
+    return existingEntry;
+  }
+
+  it('只有知识条目的合并默认不选：摘要/进展照常写入，旧设定不被覆盖', async () => {
+    useArchiveSettings.setState({ autoArchive: true });
+    const existingEntry = await seedMergeArchive();
+    const user = await enterEditor();
+    await markDoneWithContent(user);
+    await screen.findByText(/本章摘要与设定已生成/);
+    // 摘要 create + 进展 replace + 条目 merge = 3 项
+    expect(screen.getByText(/3 项待确认（含摘要、进展、条目）/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '查看' }));
+    const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
+    // 安全提示只针对「对已有条目的合并/替换」，本批只有 1 条
+    expect(
+      within(dialog).getByText(/本批含 1 条对已有条目的合并\/替换，已默认不选/u),
+    ).toBeInTheDocument();
+    expect(within(dialog).getAllByText('已标记为忽略')).toHaveLength(1);
+    expect(within(dialog).getByText(/第 1 章：新埋 1 \/ 收束 1 \/ 现存 1/u)).toBeInTheDocument();
+
+    // 摘要 create + 进展 replace 默认选中，直接采用；条目合并仍留在 pending
+    await user.click(within(dialog).getByRole('button', { name: /采用本批（2）/ }));
+
+    const chapterId = (await harness.repository.listChapters(novel.id))[0]!.id;
+    await waitFor(async () => {
+      expect(await harness.repository.getSummaryByChapter(chapterId)).toMatchObject({
+        summary: '本章摘要。',
+      });
+    });
+    expect((await harness.repository.getNovel(novel.id))?.rollingSummary).toBe('截至本章的进展。');
+    const entry = (await harness.repository.listEntries(novel.id)).find(
+      (item) => item.id === existingEntry.id,
+    );
+    expect(entry?.fields.identity).toBe('旧身份');
+    const pending = await harness.repository.listProposals(novel.id, { status: 'pending' });
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.target).toBe('knowledgeEntry');
+  });
+
+  it('条目合并点「恢复」后才随本批写入', async () => {
+    useArchiveSettings.setState({ autoArchive: true });
+    const existingEntry = await seedMergeArchive();
+    const user = await enterEditor();
+    await markDoneWithContent(user);
+    await screen.findByText(/本章摘要与设定已生成/);
+
+    await user.click(screen.getByRole('button', { name: '查看' }));
+    const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
+    await user.click(within(dialog).getByRole('button', { name: '恢复' }));
+    await user.click(within(dialog).getByRole('button', { name: /采用本批（3）/ }));
+
+    await waitFor(async () => {
+      const entry = (await harness.repository.listEntries(novel.id)).find(
+        (item) => item.id === existingEntry.id,
+      );
+      expect(entry?.fields.identity).toBe('新身份');
+    });
+    expect((await harness.repository.getNovel(novel.id))?.rollingSummary).toBe('截至本章的进展。');
+    expect(await harness.repository.listProposals(novel.id, { status: 'pending' })).toHaveLength(0);
   });
 
   it('自动归档关闭时不调用模型，只提示可手动补摘要', async () => {
@@ -1189,12 +1318,33 @@ describe('标记完成后的后台归档（S3）', () => {
           openThreads: [],
         },
       }),
+      // 进展 replace 也是本批 pending：挂载恢复要把它算进「2 项」
+      buildReplaceProposal({
+        novelId: novel.id,
+        batchId: 'batch-existing',
+        origin: 'extract',
+        target: 'novel',
+        label: '全书进展摘要',
+        specs: fieldSpecsFor('novel'),
+        targetId: novel.id,
+        current: { rollingSummary: '' },
+        payload: { rollingSummary: '上次归档的进展' },
+      }),
     ]);
     const bodies = stubArchive();
-    await enterEditor();
+    const user = await enterEditor();
 
     expect(await screen.findByText(/本章摘要与设定已生成/)).toBeInTheDocument();
+    // 摘要 create + 进展 replace = 2 项；挂载恢复也要按整批计数
+    expect(screen.getByText(/2 项待确认（含摘要、进展、条目）/)).toBeInTheDocument();
     expect(bodies).toHaveLength(0);
+
+    await user.click(screen.getByRole('button', { name: '查看' }));
+    const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
+    // 没有审计（旧批/清缓存）：一行 fallback，不阻塞收件箱
+    expect(within(dialog).getByText('本批没有伏笔流水记录。')).toBeInTheDocument();
+    // 进展 replace 不属于「已有知识条目」，默认选中，无安全提示
+    expect(within(dialog).queryByText(/本批含/u)).not.toBeInTheDocument();
   });
 
   it('同节点下章节全部完成时提示大纲节点可标完成，点击才写', async () => {

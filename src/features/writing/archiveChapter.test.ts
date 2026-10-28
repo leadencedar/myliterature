@@ -17,6 +17,7 @@ import type {
   SideStory,
 } from '@/domain/schema';
 import { createTestHarness, type TestHarness } from '@/test/renderWithProviders';
+import { ARCHIVE_AUDIT_KEY_PREFIX, archiveAuditKey, readArchiveAudit } from './archiveAudit';
 import { archiveBatchKey } from './archiveBatch';
 import {
   archiveChapter,
@@ -180,6 +181,24 @@ describe('归档服务：提取路径', () => {
     expect(result.entriesDegraded).toBe(false);
     expect(result.entryCount).toBe(2);
     expect(result.pendingCount).toBe(2);
+    // M2.1：本批全部待确认 = 摘要 + 进展 + 条目
+    expect(result.pendingTotal).toBe(4);
+    expect(result.threads).toEqual({
+      opened: ['阿越的身世'],
+      resolved: [],
+      open: ['刀的主人', '阿越的身世'],
+    });
+    // 伏笔流水按 batchId + 本章写入审计
+    const audit = readArchiveAudit(result.batchId);
+    expect(audit.chapters).toHaveLength(1);
+    expect(audit.chapters[0]).toMatchObject({
+      chapterId: chapter.id,
+      index: chapter.index,
+      title: chapter.title,
+      opened: ['阿越的身世'],
+      resolved: [],
+      open: ['刀的主人', '阿越的身世'],
+    });
 
     const proposals = await pendingProposals();
     expect(proposals).toHaveLength(4);
@@ -720,6 +739,131 @@ describe('归档服务：外传', () => {
     const summaryProposal = proposals.find((proposal) => proposal.target === 'chapterSummary')!;
     expect(summaryProposal.sourceRef.startsWith('外传·青冥旧事')).toBe(true);
     expect(result.batchId).toBeTruthy();
+  });
+});
+
+describe('归档服务：M2.1 待确认计数与伏笔审计', () => {
+  it('pendingTotal 统计本批全部待确认（摘要+进展+条目），含历史章节', async () => {
+    const chapter2 = await harness.repository.createChapter(novel.id, {
+      title: '第3章 旧识',
+      content: '林越在木屋擦刀。',
+    });
+    const { llm } = fakeLlm(async (_task, _options, callIndex) => ({
+      data: extractResult({
+        entries:
+          callIndex === 0
+            ? [
+                extractedEntry({
+                  categoryName: '人物',
+                  title: '沈砚',
+                  summary: '沉默剑客',
+                  fields: [{ key: 'goal', value: '寻找妹妹' }],
+                }),
+              ]
+            : [],
+      }),
+    }));
+
+    const first = await archiveChapter({ repository: harness.repository, llm }, await buildInput());
+    // 本章摘要 + 全书进展 + 1 条目
+    expect(first.pendingTotal).toBe(3);
+
+    const second = await archiveChapter(
+      { repository: harness.repository, llm },
+      await buildInput({ chapter: chapter2 }),
+    );
+    // 两章摘要 + 同批去重后 1 条进展 + 1 条目
+    expect(second.pendingTotal).toBe(4);
+    const pendingInBatch = await harness.repository.listProposals(novel.id, {
+      status: 'pending',
+      batchId: second.batchId,
+    });
+    expect(second.pendingTotal).toBe(pendingInBatch.length);
+  });
+
+  it('降级路径同样返回 threads，并把收束前的清单写进审计', async () => {
+    const { llm } = fakeLlm(async (task) => {
+      if (task === 'extract-settings') {
+        throw new LlmError('truncated', '输出被截断');
+      }
+      return {
+        data: {
+          summary: '林越醒来。',
+          keyEvents: ['醒来'],
+          appearingEntries: ['林越'],
+          newOpenThreads: ['阿越的身世'],
+          resolvedThreads: ['刀的主人'],
+          rollingSummary: '林越醒来。',
+        },
+      };
+    });
+
+    const result = await archiveChapter(
+      { repository: harness.repository, llm },
+      await buildInput(),
+    );
+
+    expect(result.entriesDegraded).toBe(true);
+    expect(result.threads).toEqual({
+      opened: ['阿越的身世'],
+      resolved: ['刀的主人'],
+      open: ['阿越的身世'],
+    });
+    expect(readArchiveAudit(result.batchId).chapters[0]).toMatchObject({
+      chapterId: chapter.id,
+      resolved: ['刀的主人'],
+      open: ['阿越的身世'],
+    });
+  });
+
+  it('同章重跑审计不重复，同批多章各一条', async () => {
+    const chapter2 = await harness.repository.createChapter(novel.id, {
+      title: '第3章 旧识',
+      content: '林越在木屋擦刀。',
+    });
+    const { llm } = fakeLlm(async () => ({ data: extractResult() }));
+
+    const first = await archiveChapter({ repository: harness.repository, llm }, await buildInput());
+    await archiveChapter({ repository: harness.repository, llm }, await buildInput());
+    expect(readArchiveAudit(first.batchId).chapters).toHaveLength(1);
+
+    const second = await archiveChapter(
+      { repository: harness.repository, llm },
+      await buildInput({ chapter: chapter2 }),
+    );
+    expect(second.batchId).toBe(first.batchId);
+    expect(
+      readArchiveAudit(second.batchId)
+        .chapters.map((item) => item.chapterId)
+        .sort(),
+    ).toEqual([chapter.id, chapter2.id].sort());
+  });
+
+  it('归档失败不写审计', async () => {
+    const { llm } = fakeLlm(async () => {
+      throw new LlmError('network', '无法连接模型服务');
+    });
+
+    await expect(
+      archiveChapter({ repository: harness.repository, llm }, await buildInput()),
+    ).rejects.toThrow('无法连接模型服务');
+    expect(
+      Object.keys(localStorage).filter((key) => key.startsWith(ARCHIVE_AUDIT_KEY_PREFIX)),
+    ).toEqual([]);
+  });
+
+  it('审计数据损坏不影响归档，成功后覆盖成新流水', async () => {
+    const { llm } = fakeLlm(async () => ({ data: extractResult() }));
+    const first = await archiveChapter({ repository: harness.repository, llm }, await buildInput());
+    localStorage.setItem(archiveAuditKey(first.batchId), '{broken');
+
+    const second = await archiveChapter(
+      { repository: harness.repository, llm },
+      await buildInput(),
+    );
+
+    expect(second.batchId).toBe(first.batchId);
+    expect(readArchiveAudit(first.batchId).chapters).toHaveLength(1);
   });
 });
 

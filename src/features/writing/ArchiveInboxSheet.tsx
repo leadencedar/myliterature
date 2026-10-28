@@ -1,5 +1,7 @@
+import { useMemo } from 'react';
 import { Sheet } from '@/ui/Sheet';
 import { ProposalInbox } from '../proposals/ProposalInbox';
+import { readArchiveAudit } from './archiveAudit';
 
 /**
  * 「本章档案待确认」抽屉。
@@ -22,6 +24,13 @@ export function ArchiveInboxSheet({
   /** 本批处理完毕（全部采用或全部忽略）后回调；调用方负责失效刷新 */
   onSettled?: () => void;
 }) {
+  // 打开/换批时读一次伏笔流水（localStorage 同步读，归档成功后下次打开即可见）。
+  // 按章序号排序：写入顺序在「同章重跑原地替换」时会变，序号才是稳定的阅读顺序。
+  const auditChapters = useMemo(() => {
+    if (!batchId) return [];
+    return [...readArchiveAudit(batchId).chapters].sort((a, b) => a.index - b.index);
+  }, [batchId]);
+
   return (
     <Sheet
       open={open}
@@ -30,13 +39,49 @@ export function ArchiveInboxSheet({
       onClose={onClose}
     >
       {batchId ? (
-        <ProposalInbox
-          novelId={novelId}
-          batchId={batchId}
-          acceptAllLabel="采用本批"
-          defaultExpandFirst={false}
-          onSettled={onSettled}
-        />
+        <>
+          {/* 伏笔流水（M2.1）：让作者核对本章新埋/收束/现存，误收束可在摘要里加回 */}
+          {auditChapters.length > 0 ? (
+            <div className="flex flex-col gap-1.5 rounded-xl bg-paper-sunken px-3 py-2.5">
+              <p className="text-xs font-medium text-ink-700">本批伏笔流水</p>
+              <ul className="flex flex-col gap-1.5">
+                {auditChapters.map((chapter) => {
+                  const detail = [
+                    chapter.opened.length > 0 ? `新埋：${chapter.opened.join('、')}` : '',
+                    chapter.resolved.length > 0 ? `收束：${chapter.resolved.join('、')}` : '',
+                    chapter.open.length > 0 ? `现存：${chapter.open.join('、')}` : '',
+                  ]
+                    .filter(Boolean)
+                    .join('；');
+                  return (
+                    <li key={chapter.chapterId} className="text-xs leading-relaxed text-ink-700">
+                      <p>
+                        第 {chapter.index} 章：新埋 {chapter.opened.length} / 收束{' '}
+                        {chapter.resolved.length} / 现存 {chapter.open.length}
+                      </p>
+                      {detail ? <p className="mt-0.5 text-ink-500">{detail}</p> : null}
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="text-xs leading-relaxed text-ink-500">
+                若误收束，在摘要的「未收束伏笔」里加回（展开摘要提案编辑即可）。
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-ink-500">本批没有伏笔流水记录。</p>
+          )}
+
+          <ProposalInbox
+            novelId={novelId}
+            batchId={batchId}
+            acceptAllLabel="采用本批"
+            defaultExpandFirst={false}
+            defaultIgnoreEntryOverwrites
+            safetyNotice
+            onSettled={onSettled}
+          />
+        </>
       ) : (
         <p className="text-sm text-ink-500">这一批摘要与设定已经处理完了。</p>
       )}

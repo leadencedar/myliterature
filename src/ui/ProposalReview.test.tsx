@@ -271,3 +271,62 @@ describe('提案预览 · 单条采用', () => {
     expect(onAcceptOne.mock.calls[0]![0].proposal.label).toBe('甲');
   });
 });
+
+describe('提案预览 · 初始忽略（归档安全默认 M2.1）', () => {
+  it('initiallyIgnoredIds 初始标记为忽略，采用时排除它们', async () => {
+    const user = userEvent.setup();
+    const merged = buildMergeProposal({
+      ...COMMON,
+      label: '人物 · 裴照',
+      targetId: 'e1',
+      current: { title: '裴照' },
+      incoming: { summary: '整合后的摘要' },
+    });
+    const created = createProposal('世界观设定 · 灵潮', { title: '灵潮' });
+    const { onAcceptAll } = renderReview([merged, created], {
+      initiallyIgnoredIds: [merged.id],
+    });
+
+    expect(screen.getByText('已标记为忽略')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '全部采用' }));
+
+    const items = onAcceptAll.mock.calls[0]![0];
+    expect(items.map((item) => item.proposal.label)).toEqual(['世界观设定 · 灵潮']);
+  });
+
+  it('点「恢复」后重新纳入本批', async () => {
+    const user = userEvent.setup();
+    const merged = buildMergeProposal({
+      ...COMMON,
+      label: '人物 · 裴照',
+      targetId: 'e1',
+      current: { title: '裴照' },
+      incoming: { summary: '整合后的摘要' },
+    });
+    const created = createProposal('世界观设定 · 灵潮', { title: '灵潮' });
+    const { onAcceptAll } = renderReview([merged, created], {
+      initiallyIgnoredIds: [merged.id],
+    });
+
+    await user.click(screen.getByRole('button', { name: '恢复' }));
+    expect(screen.queryByText('已标记为忽略')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '全部采用（2）' }));
+
+    const labels = onAcceptAll.mock.calls[0]![0].map((item) => item.proposal.label);
+    expect(labels).toEqual(['人物 · 裴照', '世界观设定 · 灵潮']);
+  });
+
+  it('不传 initiallyIgnoredIds 时默认全选（既有行为不变）', () => {
+    const merged = buildMergeProposal({
+      ...COMMON,
+      label: '人物 · 裴照',
+      targetId: 'e1',
+      current: { title: '裴照' },
+      incoming: { summary: '整合后的摘要' },
+    });
+    renderReview([merged, createProposal('世界观设定 · 灵潮', { title: '灵潮' })]);
+
+    expect(screen.queryByText('已标记为忽略')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '全部采用（2）' })).toBeInTheDocument();
+  });
+});

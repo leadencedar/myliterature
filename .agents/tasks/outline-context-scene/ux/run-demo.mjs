@@ -84,12 +84,12 @@ const EXTRACT_RESULT = {
   entries: [
     {
       categoryName: '人物',
-      title: '船夫',
-      aliases: ['老艄公'],
-      summary: '夜渡的船夫，认得沈砚母亲的旧簪。',
+      title: '沈砚',
+      aliases: ['小舟'],
+      summary: '失忆的流亡剑客；夜渡后确认妹妹与青冥宗旧案有关。',
       fields: [
-        { key: 'identity', value: '渡口的老船夫，夜里摆渡二十年。' },
-        { key: 'relations', value: '认得沈砚母亲的旧簪，与青冥宗旧人有过往来。' },
+        { key: 'identity', value: '流亡贵族，六扇门通缉；夜渡后开始怀疑自己的失忆与青冥宗有关。' },
+        { key: 'relations', value: '与裴照有旧怨；船夫认得其母旧簪。' },
       ],
     },
     {
@@ -100,12 +100,12 @@ const EXTRACT_RESULT = {
       fields: [{ key: 'identity', value: '岸上茶棚的伙计' }],
     },
   ],
-  summary: '沈砚以差事抵船资夜渡北上，船夫认出旧簪；裴照在旁试探青冥宗的旧事。',
+  summary: '沈砚与裴照夜渡北上，船夫认出旧簪；裴照提到青冥宗。沈砚的失忆与旧案开始缠在一起。',
   keyEvents: ['沈砚以差事抵船资', '船夫认出旧簪', '裴照提到青冥宗'],
   appearingEntries: ['沈砚', '裴照'],
   newOpenThreads: ['旧簪的来历', '青冥宗是否还有人活着'],
-  resolvedThreads: [],
-  rollingSummary: '沈砚登船北上；旧簪与青冥宗两条线索同时浮出水面。',
+  resolvedThreads: ['河灯旧案'],
+  rollingSummary: '沈砚登船北上；旧簪与青冥宗两条线索浮出水面，沈砚开始怀疑自己的失忆。',
 };
 
 /** 继续补写（S4）的假追加正文：约 2600 字，让目标 3000 字的章节补到 85% 以上 */
@@ -635,6 +635,15 @@ async function main() {
     await inboxDialog.waitFor({ state: 'visible', timeout: 10_000 });
     log('19', '打开「本章摘要与设定待确认」', await visibleText(inboxDialog, 900));
     await shot(page, '18', 'm2-02-archive-inbox-mobile.png', 'M2：本章摘要与设定待确认（摘要/进展/条目）');
+
+    // M2.1：安全默认——只有「对已有条目的合并/替换」被标记为忽略；摘要/进展默认选中
+    await shot(page, 'M2.1-a', 'm2.1-01-archive-safety-mobile.png', 'M2.1：安全提示 + 条目合并默认「已标记为忽略」；摘要/进展默认选中');
+    await inboxDialog.getByRole('button', { name: '恢复' }).first().click();
+    await page.waitForTimeout(250);
+    await shot(page, 'M2.1-b', 'm2.1-02-archive-restored-mobile.png', 'M2.1：点「恢复」后条目合并重新纳入（采用本批（4））');
+    const auditBlock = page.getByText('本批伏笔流水').locator('xpath=..');
+    await auditBlock.screenshot({ path: join(SHOTS_DIR, 'm2.1-03-thread-audit-mobile.png') });
+    log('M2.1-c', '截图 m2.1-03-thread-audit-mobile.png', 'M2.1：本章伏笔流水（新埋/收束/现存 + 误收束提示）');
     await inboxDialog.getByRole('button', { name: /采用本批/u }).click();
     await inboxDialog.waitFor({ state: 'hidden', timeout: 10_000 });
     await page.getByText('本章摘要与设定已生成').waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => {});
@@ -700,7 +709,7 @@ async function main() {
     log(
       '26',
       '走查完成',
-      `after 截图 11 张 + M2 截图 9 张；mock 请求 ${mockLog.length} 次（stream: ${mockLog.filter((item) => item.stream).length}）；页面异常 ${pageErrors.length} 个`,
+      `after 截图 11 张 + M2 截图 9 张 + M2.1 截图 3 张；mock 请求 ${mockLog.length} 次（stream: ${mockLog.filter((item) => item.stream).length}）；页面异常 ${pageErrors.length} 个`,
     );
 
     writeFileSync(join(SHOTS_DIR, 'walkthrough-data.json'), `${JSON.stringify({ seed, mockLog, pageErrors, transcript }, null, 2)}\n`);

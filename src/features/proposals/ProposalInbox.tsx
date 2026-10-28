@@ -14,6 +14,15 @@ interface ProposalInboxProps {
   onSettled?: () => void;
   acceptAllLabel?: string;
   defaultExpandFirst?: boolean;
+  /**
+   * 归档批次专用（M2.1）：**对已有知识条目的合并/替换**默认标记为忽略，
+   * 避免一次「采用本批」就覆盖作者旧设定。摘要/进展的 replace 不在此列 ——
+   * 每章归档都会产生进展 replace，默认忽略会让摘要链反而漏更新。
+   * 作者展开后点「恢复」才把被忽略的条目变更纳入本批。
+   */
+  defaultIgnoreEntryOverwrites?: boolean;
+  /** 归档批次专用：显示「含 N 条对已有条目的合并/替换，已默认不选」的安全提示 */
+  safetyNotice?: boolean;
 }
 
 /**
@@ -28,6 +37,8 @@ export function ProposalInbox({
   onSettled,
   acceptAllLabel,
   defaultExpandFirst = true,
+  defaultIgnoreEntryOverwrites = false,
+  safetyNotice = false,
 }: ProposalInboxProps) {
   const repository = useRepository();
   const invalidate = useInvalidate();
@@ -101,8 +112,23 @@ export function ProposalInbox({
     ) : null;
   }
 
+  // 归档批次的安全默认：只把「对已有知识条目的合并/替换」作为初始忽略。
+  // 摘要/进展的 replace 默认仍选中 —— 每章归档都有进展 replace，若也忽略，
+  // 作者得逐章手动恢复，摘要链反而容易漏。计数指初始状态，恢复一条后即变为选中。
+  const defaultIgnoredIds = defaultIgnoreEntryOverwrites
+    ? proposals
+        .filter((proposal) => proposal.target === 'knowledgeEntry' && proposal.action !== 'create')
+        .map((proposal) => proposal.id)
+    : [];
+
   return (
     <div className="flex flex-col gap-3">
+      {safetyNotice && defaultIgnoredIds.length > 0 ? (
+        <p className="rounded-xl bg-accent-soft px-3 py-2.5 text-xs leading-relaxed text-accent">
+          本批含 {defaultIgnoredIds.length}{' '}
+          条对已有条目的合并/替换，已默认不选；展开核对后点「恢复」才会写入。
+        </p>
+      ) : null}
       {result && result.failed.length > 0 ? (
         <div role="alert" className="rounded-xl bg-seal-soft px-4 py-3 text-sm text-seal">
           <p>{result.failed.length} 项未能写入，已保留在待确认列表中：</p>
@@ -125,6 +151,7 @@ export function ProposalInbox({
         onReject={handleReject}
         {...(acceptAllLabel ? { acceptAllLabel } : {})}
         defaultExpandFirst={defaultExpandFirst}
+        {...(defaultIgnoredIds.length > 0 ? { initiallyIgnoredIds: defaultIgnoredIds } : {})}
       />
     </div>
   );

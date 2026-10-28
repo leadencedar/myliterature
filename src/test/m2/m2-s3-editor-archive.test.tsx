@@ -150,7 +150,8 @@ describe('M2-S3 · 标记完成触发后台归档（不弹 Sheet、不阻塞）'
     await markDone(user);
 
     expect(await screen.findByText(DONE_ROW)).toBeInTheDocument();
-    expect(screen.getByText(/2 条知识库更新待确认/u)).toBeInTheDocument();
+    // M2.1：摘要 create + 进展 replace + 2 条条目 create = 4 项（全部 pending 口径）
+    expect(screen.getByText(/4 项待确认（含摘要、进展、条目）/u)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '查看' })).toBeInTheDocument();
     // 不自动弹任何 Sheet
     expect(screen.queryByRole('dialog', { name: '本章摘要' })).not.toBeInTheDocument();
@@ -184,6 +185,10 @@ describe('M2-S3 · 查看 inbox：关闭不写、采用才落库', () => {
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
     expect(within(dialog).getByRole('button', { name: /采用本批/u })).toBeInTheDocument();
+    // M2.1 伏笔流水：新埋 1 / 收束 0 / 现存 1 + 误收束提示
+    expect(within(dialog).getByText('本批伏笔流水')).toBeInTheDocument();
+    expect(within(dialog).getByText(/第 1 章：新埋 1 \/ 收束 0 \/ 现存 1/u)).toBeInTheDocument();
+    expect(within(dialog).getByText(/若误收束，在摘要的「未收束伏笔」里加回/u)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: '关闭' }));
     await waitFor(() =>
       expect(
@@ -199,36 +204,73 @@ describe('M2-S3 · 查看 inbox：关闭不写、采用才落库', () => {
     expect(screen.getByText(DONE_ROW)).toBeInTheDocument();
   });
 
-  it('采用本批档案后：摘要/进展/条目落库，状态行清空', async () => {
-    stubApi({ entriesCount: 2 });
+  it('默认「采用本批」：摘要/进展/新建条目写入，仅已有条目的合并默认不选', async () => {
+    const existing = await harness.repository.createEntry(novel.id, {
+      categoryId: characterCategory.id,
+      title: '新角色1',
+      summary: '旧摘要。',
+      fields: { identity: '旧身份' },
+    });
+    stubApi({ entriesCount: 1 });
+    const user = await enterEditor();
+    await markDone(user);
+    await screen.findByText(DONE_ROW);
+    // 摘要 create + 进展 replace（默认仍选中）+ 条目 merge（默认忽略）= 3 项
+    expect(screen.getByText(/3 项待确认（含摘要、进展、条目）/u)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '查看' }));
+    const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
+    expect(
+      within(dialog).getByText(
+        /本批含 1 条对已有条目的合并\/替换，已默认不选；展开核对后点「恢复」才会写入。/u,
+      ),
+    ).toBeInTheDocument();
+    expect(within(dialog).getAllByText('已标记为忽略')).toHaveLength(1);
+    // 默认只采用 2 项：摘要 + 进展（条目 merge 被忽略）
+    await user.click(within(dialog).getByRole('button', { name: /采用本批（2）/u }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: '本章摘要与设定待确认' }),
+      ).not.toBeInTheDocument(),
+    );
+
+    const unchanged = (await harness.repository.listEntries(novel.id)).find(
+      (entry) => entry.id === existing.id,
+    )!;
+    expect(unchanged.fields.identity).toBe('旧身份');
+    expect(unchanged.summary).toBe('旧摘要。');
+    // 进展 replace 默认选中，随本批写入
+    expect((await harness.repository.getNovel(novel.id))!.rollingSummary).toBe(
+      '林越从雪夜突围，追兵不退。',
+    );
+    const pending = await harness.repository.listProposals(novel.id, { status: 'pending' });
+    expect(pending.map((proposal) => proposal.action)).toEqual(['merge']);
+  });
+
+  it('恢复默认忽略的条目合并后随本批写入，旧条目被更新', async () => {
+    const existing = await harness.repository.createEntry(novel.id, {
+      categoryId: characterCategory.id,
+      title: '新角色1',
+      summary: '旧摘要。',
+      fields: { identity: '旧身份' },
+    });
+    stubApi({ entriesCount: 1 });
     const user = await enterEditor();
     await markDone(user);
     await screen.findByText(DONE_ROW);
 
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
-    await user.click(within(dialog).getByRole('button', { name: /采用本批/u }));
+    await user.click(within(dialog).getByRole('button', { name: '恢复' }));
+    await user.click(within(dialog).getByRole('button', { name: /采用本批（3）/u }));
 
-    await waitFor(() =>
-      expect(
-        screen.queryByRole('dialog', { name: '本章摘要与设定待确认' }),
-      ).not.toBeInTheDocument(),
-    );
-    await waitFor(() => expect(screen.queryByText(DONE_ROW)).not.toBeInTheDocument());
-
-    const summaries = await harness.repository.listSummaries(novel.id);
-    expect(summaries).toHaveLength(1);
-    expect(summaries[0]).toMatchObject({
-      chapterId: chapter.id,
-      summary: '本章摘要：林越突围。',
-      keyEvents: ['追兵破门', '林越翻窗'],
-      openThreads: ['追兵背后是谁'],
+    await waitFor(async () => {
+      const updated = (await harness.repository.listEntries(novel.id)).find(
+        (entry) => entry.id === existing.id,
+      )!;
+      expect(updated.fields.identity).toBe('身份1');
     });
-    expect((await harness.repository.getNovel(novel.id))!.rollingSummary).toBe(
-      '林越从雪夜突围，追兵不退。',
-    );
-    const entries = await harness.repository.listEntries(novel.id);
-    expect(entries.map((entry) => entry.title).sort()).toEqual(['新角色1', '新角色2']);
+    expect(await harness.repository.listProposals(novel.id, { status: 'pending' })).toHaveLength(0);
   });
 });
 
@@ -273,13 +315,13 @@ describe('M2-S3 · 设置/配置边界', () => {
   });
 });
 
-describe('M2-S3 · 状态行 N=0 文案（task-30）', () => {
-  it('条目无变化时状态行显示「本章摘要与设定已生成：待确认」', async () => {
+describe('M2-S3 · 状态行计数不低估（M2.1）', () => {
+  it('无条目变化时摘要 create + 进展 replace 也计 2 项（旧口径只报 0 条条目）', async () => {
     stubApi({ entriesCount: 0 });
     const user = await enterEditor();
     await markDone(user);
 
-    expect(await screen.findByText('本章摘要与设定已生成：待确认')).toBeInTheDocument();
+    expect(await screen.findByText(/2 项待确认（含摘要、进展、条目）/u)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '查看' })).toBeInTheDocument();
   });
 });
@@ -341,9 +383,12 @@ describe('M2-S3 · 挂载恢复（不重跑）', () => {
 
     const user = await enterEditor();
     expect(await screen.findByText(DONE_ROW)).toBeInTheDocument();
-    expect(screen.getByText(/1 条知识库更新待确认/u)).toBeInTheDocument();
+    // 本批全部 pending：摘要 + 1 条条目 = 2 项
+    expect(screen.getByText(/2 项待确认（含摘要、进展、条目）/u)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '查看' }));
-    expect(await screen.findByRole('dialog', { name: '本章摘要与设定待确认' })).toBeInTheDocument();
+    const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
+    // 没有审计记录（旧批/清缓存）时只提示一行，不阻塞
+    expect(within(dialog).getByText('本批没有伏笔流水记录。')).toBeInTheDocument();
     expect(getNonStreamCalls()).toBe(0); // 只读恢复，不重跑
   });
 });

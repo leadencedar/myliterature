@@ -25,6 +25,12 @@ interface ProposalReviewProps {
   acceptAllLabel?: string;
   /** 默认展开第一条，长列表（如收件箱）宜全部折叠 */
   defaultExpandFirst?: boolean;
+  /**
+   * 初始就标记为忽略的提案 id（归档批次里 merge/replace 默认不选，M2.1）。
+   * 与现有「忽略这条」完全同一套语义：仍显示「已标记为忽略 / 恢复」，
+   * 底部采用按钮会排除它们；不传时行为与之前逐字节一致。
+   */
+  initiallyIgnoredIds?: string[];
 }
 
 const ACTION_LABELS: Record<Proposal['action'], string> = {
@@ -63,13 +69,15 @@ export function ProposalReview({
   busy = false,
   acceptAllLabel = '全部采用',
   defaultExpandFirst = true,
+  initiallyIgnoredIds,
 }: ProposalReviewProps) {
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     const first = proposals[0];
     return defaultExpandFirst && first ? new Set([first.id]) : new Set();
   });
   const [edits, setEdits] = useState<Record<string, Record<string, string>>>({});
-  const [ignored, setIgnored] = useState<Set<string>>(new Set());
+  // 初始忽略只决定挂载时的集合；之后仍走现有的忽略/恢复交互
+  const [ignored, setIgnored] = useState<Set<string>>(() => new Set(initiallyIgnoredIds ?? []));
 
   const specsById = useMemo(() => {
     const map = new Map<string, FieldSpec[]>();

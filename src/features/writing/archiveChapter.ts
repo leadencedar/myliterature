@@ -46,6 +46,7 @@ import { buildCreateProposal, buildReplaceProposal } from '@/proposal/build';
 import { computeDiff, mergeEntities } from '@/proposal/diff';
 import { entryFieldSpecs, fieldSpecsFor } from '@/proposal/fields';
 import { getOrCreateArchiveBatch } from './archiveBatch';
+import { saveArchiveAudit } from './archiveAudit';
 import {
   ChapterSummaryResultSchema,
   buildSummarySystemPrompt,
@@ -93,6 +94,13 @@ export interface ArchiveChapterInput {
   };
 }
 
+/** 本章伏笔流水：新埋 / 收束 / 截至本章的现存清单 */
+export interface ArchiveChapterThreads {
+  opened: string[];
+  resolved: string[];
+  open: string[];
+}
+
 export interface ArchiveChapterResult {
   /** 本批提案共用的 batchId（收件箱按它查） */
   batchId: string;
@@ -100,8 +108,15 @@ export interface ArchiveChapterResult {
   summaryCreated: boolean;
   /** 本轮新建或合并更新的条目提案数（不含无变化跳过的） */
   entryCount: number;
-  /** 当前本批 pending 的条目提案数（给「N 条知识库更新待确认」） */
+  /** 当前本批 pending 的条目提案数（旧口径；M2.1 起状态行请改用 pendingTotal） */
   pendingCount: number;
+  /**
+   * 本批全部 pending 提案数（摘要 + 进展 + 条目）。
+   * M2.1：状态行与挂载恢复都用这个口径，避免「只报条目数」让作者低估待确认量。
+   */
+  pendingTotal: number;
+  /** 本章伏笔流水，同时写入 localStorage 审计供收件箱展示 */
+  threads: ArchiveChapterThreads;
   /** 条目提取被截断、已降级为只出摘要；本轮没有条目提案 */
   entriesDegraded: boolean;
 }
@@ -446,12 +461,34 @@ export async function archiveChapter(
     ...createdEntryProposals,
   ]);
 
+  // 状态行与挂载恢复都要「本批全部待确认」，不能只报条目数 —— 作者会低估确认量。
+  // 写完再查一次：pending 集合以仓储为准，不做本地推算（更新/合并后的数量不好手算）
+  const pendingAfterCreate = await repository.listProposals(novel.id, {
+    status: 'pending',
+    batchId,
+  });
+
+  const threads: ArchiveChapterThreads = {
+    opened: summaryData.newOpenThreads,
+    resolved: summaryData.resolvedThreads,
+    open: openThreads,
+  };
+  // 伏笔流水只是展示用：写失败由 saveArchiveAudit 内部吞掉，绝不能影响归档结果
+  saveArchiveAudit(batchId, {
+    chapterId: chapter.id,
+    index: chapter.index,
+    title: chapter.title,
+    ...threads,
+  });
+
   return {
     batchId,
     summaryCreated: true,
     entryCount: createdEntryProposals.length + mergedEntryCount,
-    // 本批累计待确认条目数：历史章节的 + 本轮新建的；合并更新不增加数量
+    // 旧口径（仅条目）保留给已有调用方；M2.1 起新 UI 用 pendingTotal
     pendingCount: pendingEntries.length + createdEntryProposals.length,
+    pendingTotal: pendingAfterCreate.length,
+    threads,
     entriesDegraded,
   };
 }

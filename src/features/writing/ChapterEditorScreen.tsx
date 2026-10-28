@@ -60,7 +60,8 @@ type ArchiveState =
   | {
       kind: 'done';
       batchId: string;
-      pendingCount: number;
+      /** 本批全部 pending（摘要 + 进展 + 条目），M2.1 起状态行用这个口径 */
+      pendingTotal: number;
       entryCount: number;
       summaryCreated: boolean;
       entriesDegraded: boolean;
@@ -83,13 +84,14 @@ function proposalPayload(proposal: Proposal): Record<string, unknown> | undefine
  * 本章是否已有待确认的归档提案（design §6.5）：挂载时恢复「待确认」态，不重跑。
  *
  * 归属判定：摘要提案按 `payload.chapterId`；条目提案按 `payload.sourceChapterIds`。
- * 进展 replace 提案是作品级的，没法可靠归属到某一章，只用来数本批条目数。
+ * 找到所属批次后统计**整批** pending（摘要 + 进展 + 条目）—— 状态行要给完整的待确认量，
+ * 只数条目会让作者低估（M2.1）。
  */
 async function findPendingArchive(
   repository: NovelRepository,
   novelId: string,
   chapterId: string,
-): Promise<{ batchId: string; pendingCount: number } | null> {
+): Promise<{ batchId: string; pendingTotal: number } | null> {
   const pending = await repository.listProposals(novelId, { status: 'pending' });
   const owned = pending.filter((proposal) => {
     const payload = proposalPayload(proposal);
@@ -103,10 +105,8 @@ async function findPendingArchive(
   });
   const anchor = owned[0];
   if (!anchor?.batchId) return null;
-  const pendingCount = pending.filter(
-    (proposal) => proposal.target === 'knowledgeEntry' && proposal.batchId === anchor.batchId,
-  ).length;
-  return { batchId: anchor.batchId, pendingCount };
+  const pendingTotal = pending.filter((proposal) => proposal.batchId === anchor.batchId).length;
+  return { batchId: anchor.batchId, pendingTotal };
 }
 
 interface ChapterEditorScreenProps {
@@ -742,8 +742,8 @@ export function ChapterEditorScreen({
                 <>
                   <span className="flex-1">
                     本章摘要与设定已生成：
-                    {archiveState.pendingCount > 0
-                      ? `${archiveState.pendingCount} 条知识库更新待确认`
+                    {archiveState.pendingTotal > 0
+                      ? `${archiveState.pendingTotal} 项待确认（含摘要、进展、条目）`
                       : '待确认'}
                     {archiveState.entriesDegraded ? '（知识库条目本轮未生成）' : ''}
                   </span>
