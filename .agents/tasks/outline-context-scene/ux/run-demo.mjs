@@ -108,6 +108,21 @@ const EXTRACT_RESULT = {
   rollingSummary: '沈砚登船北上；旧簪与青冥宗两条线索浮出水面，沈砚开始怀疑自己的失忆。',
 };
 
+/** outline-continue（M3 前沿续写）的假输出：3 章细纲，含场清单/冲突/钩子/引用与伏笔 */
+const FRONTIER_RESULT = {
+  chapters: ['北岸', '接应人', '旧簪'].map((name, index) => ({
+    title: `续章${index + 1} ${name}`,
+    synopsis: `沈砚与裴照${name}：谁要什么、遇到什么阻碍，结尾局面有了变化。`,
+    targetWords: 3000,
+    scenes: [`${name}·目标`, `${name}·阻碍`, `${name}·转折`],
+    conflict: `${name}的主冲突：官凭、身份与旧案`,
+    hook: `章末钩子：${name}出现了不该出现的人。`,
+    usesEntries: ['沈砚', '裴照', '渡口的规矩'],
+    resolvesThreads: index === 0 ? ['旧簪的来历'] : [],
+    plantsThreads: [`${name}新伏笔：接应人的身份`],
+  })),
+};
+
 /** 继续补写（S4）的假追加正文：约 2600 字，让目标 3000 字的章节补到 85% 以上 */
 const CONTINUE_TEXT = '船到河心，风更急了，沈砚压着斗笠没有说话。'.repeat(100);
 
@@ -185,7 +200,7 @@ async function installModelMock(page, mockLog) {
     });
     log(
       'mock',
-      stream ? '流式请求（chapter-draft / 继续补写）' : '结构化请求（outline-expand / extract-settings）',
+      stream ? '流式请求（chapter-draft / 继续补写）' : '结构化请求（outline-expand / extract-settings / outline-continue）',
       `model=${body.model ?? '?'} max_tokens=${body.max_tokens ?? '无'} response_format=${body.response_format?.type ?? '无'} messages=${JSON.stringify(
         (body.messages ?? []).map((message) => `${message.role}:${String(message.content ?? '').length}字`),
       )}`,
@@ -203,8 +218,13 @@ async function installModelMock(page, mockLog) {
           : buildSse(CHAPTER_TEXT, 'length'),
       });
     }
-    const isExpand = String(lastUserText).includes('要拆分的节点');
-    const payload = isExpand ? EXPAND_RESULT : EXTRACT_RESULT;
+    // outline-expand 的 user 里也有【本次要求】（拆成 N 个子节点），必须再按措辞区分：
+    // 续写 = 「续写 N 章。」；细化 = 「拆成 N 个子节点」
+    const isContinue = /续写 \d+ 章。/u.test(String(lastUserText));
+    const isExpand =
+      String(lastUserText).includes('要拆分的节点') ||
+      /拆成 \d+ 个子节点/u.test(String(lastUserText));
+    const payload = isContinue ? FRONTIER_RESULT : isExpand ? EXPAND_RESULT : EXTRACT_RESULT;
     return route.fulfill({
       status: 200,
       headers: { ...corsHeaders(), 'content-type': 'application/json; charset=utf-8' },
@@ -461,8 +481,30 @@ async function main() {
         outlineNodeId: continueNode.id,
       });
 
+      // M3 回溯演示：导入的旧稿作品（10 章、无大纲、部分章有摘要）
+      const backfillNovel = await repo.createNovel({
+        title: '旧稿十章',
+        genre: '武侠',
+        oneLiner: '一个旧渡口的故事，从十年前写起。',
+      });
+      const backfillTitles = ['旧渡口', '夜航', '灯下', '追兵', '渡资', '雪夜', '远山', '旧簪', '回声', '北上'];
+      for (let index = 0; index < backfillTitles.length; index += 1) {
+        const chapterIndex = index + 1;
+        const backfillChapter = await repo.createChapter(backfillNovel.id, {
+          title: backfillTitles[index],
+          content: `第${chapterIndex}章的正文：旧稿里的一段故事，足够用来做回溯预览。`,
+        });
+        await repo.upsertSummary(backfillNovel.id, backfillChapter.id, {
+          summary: `第${chapterIndex}章摘要：${'沈砚沿着旧渡口向北，线索一点点浮出来。'.repeat(2)}`,
+          keyEvents: [`事件${chapterIndex}`],
+          appearingEntryIds: [],
+          openThreads: [],
+        });
+      }
+
       return {
         novelId: novel.id,
+        backfillNovelId: backfillNovel.id,
         entryIds: { shen: shen.id, pei: pei.id, rule: rule.id },
         outlineIds: {
           volume: volume.id,
@@ -480,7 +522,7 @@ async function main() {
     log(
       '01',
       '种子数据完成',
-      `小说《归墟纪》 条目 3 条（含 pinned 世界观）、卷 3 个、章节点 3 个、章节 3 章（2 草稿 + 1 已完成）`,
+      `小说《归墟纪》 条目 3 条、卷 3 个、章节点 3 个、章节 3 章；导入旧稿《旧稿十章》10 章（无大纲）`,
     );
 
     // active novel 写入 localStorage（zustand persist），再进写作页
@@ -705,11 +747,73 @@ async function main() {
     log('25', 'S4：继续补写完成，差额提示消失', await visibleText(page.getByRole('dialog', { name: '生成本章正文' }), 500));
     await shot(page, '25', 'm2-09-continue-result-mobile.png', 'M2-S4：补写已追加；达到目标后提示消失');
 
+    // ================================================================
+    // M3：导入旧稿 1:1 回溯大纲 → 前沿续写 3 章（task-49 沙盒）
+    // ================================================================
+    const switchActiveNovel = async (novelId) => {
+      await page.evaluate(
+        (id) =>
+          localStorage.setItem(
+            'myliterature.active-novel',
+            JSON.stringify({ state: { activeNovelId: id }, version: 0 }),
+          ),
+        novelId,
+      );
+      await page.goto(`${BASE}/write`, { waitUntil: 'load' });
+      await page.waitForTimeout(400);
+    };
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    // 11) 导入 10 章作品：回溯预览 → 生成 → 大纲树
+    await switchActiveNovel(seed.backfillNovelId);
+    const backfillEntry = page.getByRole('button', { name: '按已有章节生成大纲' });
+    await backfillEntry.waitFor({ state: 'visible', timeout: 20_000 });
+    await backfillEntry.click();
+    const backfillDialog = page.getByRole('dialog', { name: '按已有章节生成大纲' });
+    await backfillDialog.waitFor({ state: 'visible', timeout: 10_000 });
+    log('M3-a', '打开「按已有章节生成大纲」预览', await visibleText(backfillDialog, 900));
+    await shot(page, 'M3-1', 'm3-01-backfill-preview-mobile.png', 'M3：导入 10 章 → 1:1 回溯预览（数量/标题/摘要截断）');
+    await backfillDialog.getByRole('button', { name: '生成 10 个章节节点' }).click();
+    await backfillDialog
+      .getByText('已生成 10 个节点，可手动分卷。')
+      .waitFor({ state: 'visible', timeout: 15_000 });
+    await backfillDialog.getByRole('button', { name: '完成' }).click();
+    await backfillDialog.waitFor({ state: 'hidden', timeout: 10_000 });
+    await page
+      .getByRole('button', { name: '编辑「旧渡口」' })
+      .waitFor({ state: 'visible', timeout: 15_000 });
+    log('M3-b', '回溯完成：大纲树出现 10 个章节节点', await visibleText(page.locator('body'), 500));
+    await shot(page, 'M3-2', 'm3-02-backfill-outline-mobile.png', 'M3：确认后 1:1 节点 + 章节关联；入口消失、续写入口出现');
+
+    // 12) 回到连载作品：前沿续写 3 章 → 提案 → 采用
+    await switchActiveNovel(seed.novelId);
+    const continueEntry = page.getByRole('button', { name: '规划后续 3–5 章大纲' });
+    await continueEntry.waitFor({ state: 'visible', timeout: 20_000 });
+    await continueEntry.click();
+    const continueDialog = page.getByRole('dialog', { name: '规划后续 3–5 章大纲' });
+    await continueDialog.waitFor({ state: 'visible', timeout: 10_000 });
+    log('M3-c', '打开「规划后续 3–5 章大纲」', await visibleText(continueDialog, 700));
+    await shot(page, 'M3-3', 'm3-03-continue-panel-mobile.png', 'M3：续写面板「本次依据」（大纲尾部/进展/最近摘要/伏笔）');
+    await continueDialog.getByRole('button', { name: '规划 3 章大纲' }).click();
+    await continueDialog
+      .getByText('已生成提案，确认后写入大纲。')
+      .waitFor({ state: 'visible', timeout: 20_000 });
+    log('M3-d', '续写提案', await visibleText(continueDialog, 1200));
+    await shot(page, 'M3-4', 'm3-04-continue-proposal-mobile.png', 'M3：续写提案（3 章：场清单/冲突/钩子/引用设定/伏笔）+ 本次注入');
+    await continueDialog.getByRole('button', { name: '采用这份续写' }).click();
+    await continueDialog.waitFor({ state: 'hidden', timeout: 15_000 });
+    const adoptedFirst = page.getByRole('button', { name: '编辑「续章1 北岸」' });
+    await adoptedFirst.waitFor({ state: 'visible', timeout: 15_000 });
+    await adoptedFirst.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+    log('M3-e', '采用续写后大纲树', await visibleText(page.locator('body'), 600));
+    await shot(page, 'M3-5', 'm3-05-continue-adopted-mobile.png', 'M3：采用后新节点追加到末卷；已有章节/设定不变');
+
     // 9) 汇总
     log(
-      '26',
+      '30',
       '走查完成',
-      `after 截图 11 张 + M2 截图 9 张 + M2.1 截图 3 张；mock 请求 ${mockLog.length} 次（stream: ${mockLog.filter((item) => item.stream).length}）；页面异常 ${pageErrors.length} 个`,
+      `after 截图 11 张 + M2 截图 9 张 + M2.1 截图 3 张 + M3 截图 5 张；mock 请求 ${mockLog.length} 次（stream: ${mockLog.filter((item) => item.stream).length}）；页面异常 ${pageErrors.length} 个`,
     );
 
     writeFileSync(join(SHOTS_DIR, 'walkthrough-data.json'), `${JSON.stringify({ seed, mockLog, pageErrors, transcript }, null, 2)}\n`);

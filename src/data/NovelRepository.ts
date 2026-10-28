@@ -79,6 +79,20 @@ export interface OutlineTreeInputNode {
   children: OutlineTreeInputNode[];
 }
 
+/**
+ * 回溯大纲的落库入参：一章一个顶层节点，并把章节的 outlineNodeId 回填。
+ *
+ * 身份与顺序（id / parentId / order / 时间戳）仍由仓储在事务里生成；
+ * 调用方只描述「这一章要变成什么节点」。
+ */
+export interface OutlineBackfillInputItem {
+  chapterId: string;
+  title: string;
+  synopsis: string;
+  targetWords: number | null;
+  status: OutlineNode['status'];
+}
+
 /** appendScenarioNode 的入参：身份、层级、摘要与时间由仓储掌管 */
 export type ScenarioNodeInput = Omit<
   ScenarioNode,
@@ -168,6 +182,21 @@ export interface NovelRepository {
   updateOutlineLinks(
     updates: readonly { id: string; linkedEntryIds: readonly string[] }[],
   ): Promise<void>;
+  /**
+   * 按已有主线章节 1:1 回填顶层大纲节点（M3 导入作品回溯，无 AI）。
+   *
+   * 单个事务 `[outlineNodes, chapters]`：
+   * - 为每项建 `parentId=null` 的节点，order 接在现有顶层节点之后；
+   * - 把对应章节的 `outlineNodeId` 回填成新节点；
+   * - 事务内重查：章节不存在 / 已挂大纲 / 属于别的作品 → 跳过该章（不覆盖已有关系）；
+   * - 全部跳过时抛错（避免「确认后什么都没发生」）；任何一步失败整体回滚。
+   *
+   * 返回本次创建的节点（按入参顺序）。
+   */
+  commitOutlineBackfill(
+    novelId: string,
+    items: readonly OutlineBackfillInputItem[],
+  ): Promise<OutlineNode[]>;
   /** 批量写入同层排序，用于拖拽重排 */
   reorderOutline(updates: { id: string; parentId: string | null; order: number }[]): Promise<void>;
 

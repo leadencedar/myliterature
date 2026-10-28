@@ -1112,13 +1112,18 @@ describe('标记完成后的后台归档（S3）', () => {
     await user.click(within(dialog).getByRole('button', { name: /采用本批（2）/ }));
 
     const chapterId = (await harness.repository.listChapters(novel.id))[0]!.id;
+    // 摘要/进展是逐条落库的：摘要先到不代表进展写完了，三条断言放进同一个 waitFor
     await waitFor(async () => {
       expect(await harness.repository.getSummaryByChapter(chapterId)).toMatchObject({
         summary: '本章摘要。',
       });
+      expect((await harness.repository.getNovel(novel.id))?.rollingSummary).toBe(
+        '截至本章的进展。',
+      );
+      expect(await harness.repository.listProposals(novel.id, { status: 'pending' })).toHaveLength(
+        0,
+      );
     });
-    expect((await harness.repository.getNovel(novel.id))?.rollingSummary).toBe('截至本章的进展。');
-    expect(await harness.repository.listProposals(novel.id, { status: 'pending' })).toHaveLength(0);
     await waitFor(() => expect(screen.queryByText(/本章摘要与设定已生成/)).not.toBeInTheDocument());
   });
 
@@ -1145,13 +1150,18 @@ describe('标记完成后的后台归档（S3）', () => {
     expect(within(dialog).queryByText('已标记为忽略')).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: /采用本批（2）/ }));
 
+    // 同样：摘要 replace 先落库时进展 replace 可能还在写，三条断言一起等
     await waitFor(async () => {
       expect(await harness.repository.getSummaryByChapter(existing.id)).toMatchObject({
         summary: '本章摘要。',
       });
+      expect((await harness.repository.getNovel(novel.id))?.rollingSummary).toBe(
+        '截至本章的进展。',
+      );
+      expect(await harness.repository.listProposals(novel.id, { status: 'pending' })).toHaveLength(
+        0,
+      );
     });
-    expect((await harness.repository.getNovel(novel.id))?.rollingSummary).toBe('截至本章的进展。');
-    expect(await harness.repository.listProposals(novel.id, { status: 'pending' })).toHaveLength(0);
   });
 
   /** 造一个「归档会合并已有条目」的批次：预建裴照 + extract 返回同名变更 */

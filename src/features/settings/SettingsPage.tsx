@@ -21,6 +21,7 @@ type TestState =
 const TASK_ORDER: TaskKind[] = [
   'project-setup',
   'outline-expand',
+  'outline-continue',
   'chapter-draft',
   'paragraph-revise',
   'chapter-summary',

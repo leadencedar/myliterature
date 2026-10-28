@@ -13,6 +13,7 @@ import {
   type WritingNormScope,
 } from '@/domain/schema';
 import type {
+  OutlineBackfillInputItem,
   OutlineTreeInputNode,
   ScenarioNodeInput,
   ScenarioSetupInput,
@@ -729,6 +730,142 @@ describe('大纲关联批量写（updateOutlineLinks）', () => {
 
   it('空数组是 no-op', async () => {
     await expect(repo.updateOutlineLinks([])).resolves.toBeUndefined();
+  });
+});
+
+describe('大纲回溯（commitOutlineBackfill）', () => {
+  function backfillItem(
+    chapterId: string,
+    title: string,
+    overrides: Partial<OutlineBackfillInputItem> = {},
+  ): OutlineBackfillInputItem {
+    return { chapterId, title, synopsis: '', targetWords: null, status: 'planned', ...overrides };
+  }
+
+  it('一章一节点、顶层接排，回填章节关联且不动正文', async () => {
+    const novel = await seedNovel();
+    const existingRoot = await repo.createOutlineNode(novel.id, { title: '手写卷一' });
+    const chapter1 = await repo.createChapter(novel.id, {
+      title: '第1章 渡口',
+      content: '林越在渡口醒来。',
+    });
+    const chapter2 = await repo.createChapter(novel.id, {
+      title: '第2章 雪夜',
+      content: '追兵临门。',
+    });
+    const chapter3 = await repo.createChapter(novel.id, { title: '第3章 旧识' });
+
+    // 回溯计划不设目标字数（M3 P1）：节点 targetWords 一律 null；仓储仍按入参原样落库
+    const created = await repo.commitOutlineBackfill(novel.id, [
+      backfillItem(chapter3.id, '第3章 回溯'),
+      backfillItem(chapter1.id, '第1章 回溯', {
+        synopsis: '林越醒来。',
+        status: 'done',
+      }),
+    ]);
+
+    expect(created).toHaveLength(2);
+    expect(created[0]).toMatchObject({
+      novelId: novel.id,
+      parentId: null,
+      order: 1,
+      title: '第3章 回溯',
+      targetWords: null,
+      status: 'planned',
+    });
+    expect(created[1]).toMatchObject({
+      parentId: null,
+      order: 2,
+      targetWords: null,
+      status: 'done',
+    });
+
+    const outline = await repo.listOutline(novel.id);
+    expect(outline.map((node) => node.title)).toEqual(['手写卷一', '第3章 回溯', '第1章 回溯']);
+    expect(outline[0]!.id).toBe(existingRoot.id);
+
+    const chapters = await repo.listChapters(novel.id);
+    const byId = new Map(chapters.map((chapter) => [chapter.id, chapter] as const));
+    expect(byId.get(chapter3.id)?.outlineNodeId).toBe(created[0]!.id);
+    expect(byId.get(chapter1.id)?.outlineNodeId).toBe(created[1]!.id);
+    expect(byId.get(chapter2.id)?.outlineNodeId).toBeNull();
+    // 章节正文/标题/字数一律不动
+    expect(byId.get(chapter1.id)?.title).toBe('第1章 渡口');
+    expect(byId.get(chapter1.id)?.content).toBe('林越在渡口醒来。');
+    expect(byId.get(chapter1.id)?.wordCount).toBe(countWords('林越在渡口醒来。'));
+  });
+
+  it('事务内重查：已挂大纲的章节跳过，不覆盖原关联', async () => {
+    const novel = await seedNovel();
+    const existingNode = await repo.createOutlineNode(novel.id, { title: '已有节点' });
+    const linked = await repo.createChapter(novel.id, { title: '第1章 已有大纲' });
+    await repo.updateChapter(linked.id, { outlineNodeId: existingNode.id });
+    const fresh = await repo.createChapter(novel.id, { title: '第2章 待回填' });
+
+    const created = await repo.commitOutlineBackfill(novel.id, [
+      backfillItem(linked.id, '第1章 回溯'),
+      backfillItem(fresh.id, '第2章 回溯'),
+    ]);
+
+    expect(created).toHaveLength(1);
+    expect(created[0]!.title).toBe('第2章 回溯');
+    expect((await repo.getChapter(linked.id))?.outlineNodeId).toBe(existingNode.id);
+    expect((await repo.getChapter(fresh.id))?.outlineNodeId).toBe(created[0]!.id);
+  });
+
+  it('重复执行不重复建节点；全部跳过时抛错', async () => {
+    const novel = await seedNovel();
+    const chapter = await repo.createChapter(novel.id, { title: '第1章' });
+    const items = [backfillItem(chapter.id, '第1章 回溯')];
+    await repo.commitOutlineBackfill(novel.id, items);
+    const before = await repo.listOutline(novel.id);
+
+    await expect(repo.commitOutlineBackfill(novel.id, items)).rejects.toThrow('没有可回填');
+    expect((await repo.listOutline(novel.id)).map((node) => node.id)).toEqual(
+      before.map((node) => node.id),
+    );
+  });
+
+  it('中途失败整体回滚：节点与章节关联都不落库', async () => {
+    const novel = await seedNovel();
+    const chapter1 = await repo.createChapter(novel.id, { title: '第1章' });
+    const chapter2 = await repo.createChapter(novel.id, { title: '第2章' });
+
+    await expect(
+      repo.commitOutlineBackfill(novel.id, [
+        backfillItem(chapter1.id, '合法节点'),
+        // 标题为空会撞 OutlineNodeSchema，整批必须回滚
+        backfillItem(chapter2.id, ''),
+      ]),
+    ).rejects.toThrow();
+
+    expect(await repo.listOutline(novel.id)).toHaveLength(0);
+    expect((await repo.getChapter(chapter1.id))?.outlineNodeId).toBeNull();
+    expect((await repo.getChapter(chapter2.id))?.outlineNodeId).toBeNull();
+  });
+
+  it('跨作品保护：别书的章节跳过，全部无效时抛错', async () => {
+    const novel = await seedNovel();
+    const other = await seedNovel('另一本书');
+    const foreign = await repo.createChapter(other.id, { title: '别书第1章' });
+    const own = await repo.createChapter(novel.id, { title: '本书第1章' });
+
+    const created = await repo.commitOutlineBackfill(novel.id, [
+      backfillItem(foreign.id, '别书回溯'),
+      backfillItem(own.id, '本书回溯'),
+    ]);
+
+    expect(created).toHaveLength(1);
+    expect(created[0]!.title).toBe('本书回溯');
+    expect((await repo.getChapter(foreign.id))?.outlineNodeId).toBeNull();
+    await expect(
+      repo.commitOutlineBackfill(novel.id, [backfillItem(foreign.id, '别书回溯')]),
+    ).rejects.toThrow('没有可回填');
+  });
+
+  it('空入参直接拒绝', async () => {
+    const novel = await seedNovel();
+    await expect(repo.commitOutlineBackfill(novel.id, [])).rejects.toThrow('没有可回填');
   });
 });
 

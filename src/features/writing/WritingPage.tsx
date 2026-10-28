@@ -10,6 +10,9 @@ import { EmptyState, Page, Section } from '@/ui/Page';
 import { useAnyModalOpen } from '@/ui/Sheet';
 import { MoreIcon, PlusIcon } from '@/ui/icons';
 import { formatWordCount } from '@/ui/format';
+import { planOutlineBackfill } from '../outline/backfillOutline';
+import { OutlineBackfillSheet } from '../outline/OutlineBackfillSheet';
+import { OutlineContinueSheet } from '../outline/OutlineContinueSheet';
 import { OutlineNodeSheet } from '../outline/OutlineNodeSheet';
 import { OutlineTreeView } from '../outline/OutlineTreeView';
 import { ExportSheet } from '../export/ExportSheet';
@@ -100,6 +103,10 @@ function WritingContent({ novel }: { novel: Novel }) {
   const [selected, setSelected] = useState<{ node: OutlineNode; depth: number } | null>(null);
   const [editingChapterId, setEditingChapterId] = useState<string | null>(wantedChapterId);
   const [exportOpen, setExportOpen] = useState(false);
+  /** 回溯大纲预览抽屉：有章节没大纲时，作者确认后才写库 */
+  const [backfillOpen, setBackfillOpen] = useState(false);
+  /** 前沿续写抽屉：一次调用产出 3–5 章细纲提案 */
+  const [continueOpen, setContinueOpen] = useState(false);
   /** 外传抽屉：null 关闭；'new' 新建；否则为要编辑的外传 id */
   const [sideSheet, setSideSheet] = useState<'new' | string | null>(null);
   const modalOpen = useAnyModalOpen();
@@ -126,6 +133,18 @@ function WritingContent({ novel }: { novel: Novel }) {
   const mainChapters = chaptersOfTrack(chapters, null);
   const stats = outlineStats(outline);
   const writtenWords = mainChapters.reduce((sum, chapter) => sum + chapter.wordCount, 0);
+  /**
+   * 回溯大纲计划（M3 S2）：纯确定性 1:1 映射，不调模型。
+   * 只有「有主线章节、还没有大纲」的存量作品才用得到；计划为空时入口不出现。
+   */
+  const backfillPlan = planOutlineBackfill(chapters, data?.summaries ?? []);
+  /**
+   * 两个自动大纲入口互斥：
+   * - 有章节没大纲 → 「按已有章节生成大纲」（1:1 回溯）；
+   * - 已有大纲、或没有可回溯的章节但已经在写 → 「规划后续 3–5 章大纲」。
+   */
+  const showBackfillEntry = outline.length === 0 && backfillPlan.length > 0;
+  const showContinueEntry = !showBackfillEntry && (outline.length > 0 || mainChapters.length > 0);
 
   /** 每个大纲节点已写了多少章 */
   const chapterCountByNode = new Map<string, number>();
@@ -325,6 +344,13 @@ function WritingContent({ novel }: { novel: Novel }) {
                 ? '点节点可编辑梗概、关联设定或用 AI 细化；点右侧把手调整层级与顺序。'
                 : '这本书还没有大纲。导入的旧稿可以先不建大纲，想规划后续剧情时再加。'
             }
+            action={
+              showContinueEntry ? (
+                <Button size="sm" onClick={() => setContinueOpen(true)}>
+                  规划后续 3–5 章大纲
+                </Button>
+              ) : undefined
+            }
           >
             {outline.length > 0 ? (
               <OutlineTreeView
@@ -333,9 +359,21 @@ function WritingContent({ novel }: { novel: Novel }) {
                 onSelect={(node, depth) => setSelected({ node, depth })}
               />
             ) : (
-              <Button variant="secondary" size="lg" block onClick={addRootNode}>
-                添加第一个大纲节点
-              </Button>
+              <div className="flex flex-col gap-2">
+                {showBackfillEntry ? (
+                  <Button variant="primary" size="lg" block onClick={() => setBackfillOpen(true)}>
+                    按已有章节生成大纲
+                  </Button>
+                ) : null}
+                <Button
+                  variant={showBackfillEntry ? 'secondary' : 'primary'}
+                  size="lg"
+                  block
+                  onClick={addRootNode}
+                >
+                  添加第一个大纲节点
+                </Button>
+              </div>
             )}
           </Section>
 
@@ -369,6 +407,29 @@ function WritingContent({ novel }: { novel: Novel }) {
           {sideSection}
         </>
       )}
+
+      <OutlineBackfillSheet
+        open={backfillOpen}
+        novelId={novel.id}
+        plan={backfillPlan}
+        chapters={chapters}
+        onClose={() => setBackfillOpen(false)}
+      />
+
+      {data?.style ? (
+        <OutlineContinueSheet
+          open={continueOpen}
+          novel={novel}
+          style={data.style}
+          outline={outline}
+          chapters={chapters}
+          summaries={data.summaries}
+          entries={data.entries}
+          categories={data.categories}
+          {...(data.writingNorms ? { writingNorms: data.writingNorms } : {})}
+          onClose={() => setContinueOpen(false)}
+        />
+      ) : null}
 
       <ExportSheet
         open={exportOpen}

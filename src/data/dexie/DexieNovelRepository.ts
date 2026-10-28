@@ -67,6 +67,7 @@ import type {
   EntryQuery,
   EntryUpdateInput,
   NovelRepository,
+  OutlineBackfillInputItem,
   OutlineTreeInputNode,
   ScenarioNodeInput,
   ScenarioSetupInput,
@@ -526,6 +527,52 @@ export class DexieNovelRepository implements NovelRepository {
         }
       };
       await create(nodes, anchorId, startOrder);
+      return created;
+    });
+  }
+
+  async commitOutlineBackfill(
+    novelId: string,
+    items: readonly OutlineBackfillInputItem[],
+  ): Promise<OutlineNode[]> {
+    // 空批次等于「确认后什么都没发生」，直接拒绝，不进事务
+    if (items.length === 0) throw new Error('没有可回填的章节');
+
+    return this.db.transaction('rw', [this.db.outlineNodes, this.db.chapters], async () => {
+      const existing = await this.db.outlineNodes.where('novelId').equals(novelId).toArray();
+      // 接在现有顶层节点之后；现有卷/节点不动
+      let nextOrder = existing.filter((node) => node.parentId === null).length;
+      const timestamp = now();
+      const created: OutlineNode[] = [];
+
+      for (const item of items) {
+        // 事务内重查：计划到确认之间可能已有别的入口挂了节点，覆盖会拆出两套关联
+        const chapter = await this.db.chapters.get(item.chapterId);
+        if (!chapter || chapter.novelId !== novelId) continue; // 跨作品保护：静默跳过
+        if (chapter.outlineNodeId !== null) continue;
+
+        const node = OutlineNodeSchema.parse({
+          id: newId(),
+          novelId,
+          parentId: null,
+          order: nextOrder++,
+          title: item.title,
+          synopsis: item.synopsis,
+          targetWords: item.targetWords,
+          status: item.status,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        });
+        await this.db.outlineNodes.add(node);
+        // 回填关联：章节正文/编号/标题一律不动，只写 outlineNodeId 与 updatedAt
+        await this.db.chapters.put({ ...chapter, outlineNodeId: node.id, updatedAt: timestamp });
+        created.push(node);
+      }
+
+      // 全部跳过（都被别的入口关联/删除了）时抛错，让调用方知道「什么都没发生」
+      if (created.length === 0) {
+        throw new Error('没有可回填的章节，可能都已关联大纲');
+      }
       return created;
     });
   }

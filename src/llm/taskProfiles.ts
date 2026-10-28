@@ -6,6 +6,8 @@ export type TaskKind =
   | 'project-setup'
   /** 把大纲节点扩写成更细的子节点 */
   | 'outline-expand'
+  /** 在既有大纲之后续写 3–5 章的前沿大纲 */
+  | 'outline-continue'
   /** 生成整章正文 */
   | 'chapter-draft'
   /** 段落续写 / 改写 / 扩写 */
@@ -74,6 +76,19 @@ export const TASK_PROFILES: Record<TaskKind, TaskProfile> = {
     useStrongModel: true,
     structured: true,
     label: '细化大纲',
+  },
+  /**
+   * 前沿续写：只规划不写正文，要承接伏笔、守住作者边界。
+   * 温度比细化大纲（0.8）低一档：这是顺着既有走向往前推，不是发明新分支；
+   * 仍然值得用强模型 + 高思维链，规划错了后面几章正文都白写。
+   */
+  'outline-continue': {
+    thinking: true,
+    reasoningEffort: 'high',
+    temperature: 0.6,
+    useStrongModel: true,
+    structured: true,
+    label: '续写后续大纲',
   },
   'chapter-draft': {
     thinking: false,
