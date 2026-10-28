@@ -46,10 +46,19 @@ export function ArchiveInboxSheet({
               <p className="text-xs font-medium text-ink-700">本批伏笔流水</p>
               <ul className="flex flex-col gap-1.5">
                 {auditChapters.map((chapter) => {
+                  // 无历史伏笔时（open 与 opened 完全相同且没有收束），「现存」就是本章新埋的重复：
+                  // 明细只写新埋，计数行注明，减少一眼扫过去的噪音
+                  const existingMatchesOpened =
+                    chapter.resolved.length === 0 &&
+                    chapter.open.length > 0 &&
+                    chapter.open.length === chapter.opened.length &&
+                    chapter.open.every((thread, index) => thread === chapter.opened[index]);
                   const detail = [
                     chapter.opened.length > 0 ? `新埋：${chapter.opened.join('、')}` : '',
                     chapter.resolved.length > 0 ? `收束：${chapter.resolved.join('、')}` : '',
-                    chapter.open.length > 0 ? `现存：${chapter.open.join('、')}` : '',
+                    !existingMatchesOpened && chapter.open.length > 0
+                      ? `现存：${chapter.open.join('、')}`
+                      : '',
                   ]
                     .filter(Boolean)
                     .join('；');
@@ -58,6 +67,7 @@ export function ArchiveInboxSheet({
                       <p>
                         第 {chapter.index} 章：新埋 {chapter.opened.length} / 收束{' '}
                         {chapter.resolved.length} / 现存 {chapter.open.length}
+                        {existingMatchesOpened ? '（现存均为本章新埋）' : ''}
                       </p>
                       {detail ? <p className="mt-0.5 text-ink-500">{detail}</p> : null}
                     </li>

@@ -1088,7 +1088,12 @@ describe('标记完成后的后台归档（S3）', () => {
     // M2.1-S2b：进展 replace 不再默认忽略（每章都有，否则摘要链会漏），无「默认不选」提示
     expect(within(dialog).queryByText(/本批含/u)).not.toBeInTheDocument();
     expect(within(dialog).getByText('本批伏笔流水')).toBeInTheDocument();
-    expect(within(dialog).getByText(/第 1 章：新埋 1 \/ 收束 0 \/ 现存 1/u)).toBeInTheDocument();
+    // 无历史伏笔：现存就是本章新埋，明细不重复，计数行注明
+    expect(
+      within(dialog).getByText(/第 1 章：新埋 1 \/ 收束 0 \/ 现存 1（现存均为本章新埋）/u),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText('新埋：新伏笔')).toBeInTheDocument();
+    expect(within(dialog).queryByText('现存：新伏笔')).not.toBeInTheDocument();
     expect(within(dialog).getByText(/若误收束，在摘要的「未收束伏笔」里加回/u)).toBeInTheDocument();
 
     // 关闭不写任何东西
@@ -1203,12 +1208,17 @@ describe('标记完成后的后台归档（S3）', () => {
 
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
-    // 安全提示只针对「对已有条目的合并/替换」，本批只有 1 条
+    // 安全提示动态化：本批共 3 项，其中 1 条合并默认不选，当前跳过 1 条 → 将写入 2 项
     expect(
-      within(dialog).getByText(/本批含 1 条对已有条目的合并\/替换，已默认不选/u),
+      within(dialog).getByText(
+        /本批共 3 项，其中 1 条对已有条目的合并\/替换默认不选；当前还有 1 条跳过（底部「采用本批」只计入将写入的 2 项）/u,
+      ),
     ).toBeInTheDocument();
     expect(within(dialog).getAllByText('已标记为忽略')).toHaveLength(1);
+    // 有历史伏笔（收束 1 条）时仍显示三类，不做「现存均为本章新埋」去重
     expect(within(dialog).getByText(/第 1 章：新埋 1 \/ 收束 1 \/ 现存 1/u)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/（现存均为本章新埋）/u)).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/现存：新伏笔/u)).toBeInTheDocument();
 
     // 摘要 create + 进展 replace 默认选中，直接采用；条目合并仍留在 pending
     await user.click(within(dialog).getByRole('button', { name: /采用本批（2）/ }));
@@ -1229,7 +1239,7 @@ describe('标记完成后的后台归档（S3）', () => {
     expect(pending[0]?.target).toBe('knowledgeEntry');
   });
 
-  it('条目合并点「恢复」后才随本批写入', async () => {
+  it('条目合并点「纳入本批」后才随本批写入，提示变为已全部纳入', async () => {
     useArchiveSettings.setState({ autoArchive: true });
     const existingEntry = await seedMergeArchive();
     const user = await enterEditor();
@@ -1238,7 +1248,14 @@ describe('标记完成后的后台归档（S3）', () => {
 
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
-    await user.click(within(dialog).getByRole('button', { name: '恢复' }));
+    await user.click(within(dialog).getByRole('button', { name: '纳入本批' }));
+
+    // 全部纳入后安全提示与底部计数同步
+    expect(
+      within(dialog).getByText(
+        /本批共 3 项，其中 1 条对已有条目的合并\/替换已全部纳入（将写入 3 项）/u,
+      ),
+    ).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: /采用本批（3）/ }));
 
     await waitFor(async () => {
@@ -1249,6 +1266,75 @@ describe('标记完成后的后台归档（S3）', () => {
     });
     expect((await harness.repository.getNovel(novel.id))?.rollingSummary).toBe('截至本章的进展。');
     expect(await harness.repository.listProposals(novel.id, { status: 'pending' })).toHaveLength(0);
+  });
+
+  it('安全提示随「纳入本批」动态更新：部分跳过 → 已全部纳入', async () => {
+    useArchiveSettings.setState({ autoArchive: true });
+    // 两条已有条目都发生变更 → 2 条 merge 默认不选
+    await harness.repository.createEntry(novel.id, {
+      categoryId: charCategory.id,
+      title: '裴照',
+      fields: { identity: '旧身份' },
+    });
+    await harness.repository.createEntry(novel.id, {
+      categoryId: charCategory.id,
+      title: '灵潮',
+      fields: { identity: '旧潮' },
+    });
+    stubArchive({
+      entries: [
+        {
+          categoryName: '人物',
+          title: '裴照',
+          aliases: [],
+          summary: '',
+          fields: [{ key: 'identity', value: '新身份' }],
+        },
+        {
+          categoryName: '人物',
+          title: '灵潮',
+          aliases: [],
+          summary: '',
+          fields: [{ key: 'identity', value: '新潮' }],
+        },
+      ],
+      summary: '本章摘要。',
+      keyEvents: ['事件'],
+      appearingEntries: [],
+      newOpenThreads: [],
+      resolvedThreads: [],
+      rollingSummary: '截至本章的进展。',
+    });
+    const user = await enterEditor();
+    await markDoneWithContent(user);
+    await screen.findByText(/本章摘要与设定已生成/);
+    // 摘要 + 进展 + 2 条条目合并 = 4 项
+    expect(screen.getByText(/4 项待确认（含摘要、进展、条目）/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '查看' }));
+    const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
+    expect(
+      within(dialog).getByText(
+        /本批共 4 项，其中 2 条对已有条目的合并\/替换默认不选；当前还有 2 条跳过（底部「采用本批」只计入将写入的 2 项）/u,
+      ),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '采用本批（2）' })).toBeInTheDocument();
+
+    // 纳入一条：跳过数减一，将写入加一
+    await user.click(within(dialog).getAllByRole('button', { name: '纳入本批' })[0]!);
+    expect(
+      within(dialog).getByText(/当前还有 1 条跳过（底部「采用本批」只计入将写入的 3 项）/u),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '采用本批（3）' })).toBeInTheDocument();
+
+    // 全部纳入
+    await user.click(within(dialog).getByRole('button', { name: '纳入本批' }));
+    expect(
+      within(dialog).getByText(
+        /本批共 4 项，其中 2 条对已有条目的合并\/替换已全部纳入（将写入 4 项）/u,
+      ),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '采用本批（4）' })).toBeInTheDocument();
   });
 
   it('自动归档关闭时不调用模型，只提示可手动补摘要', async () => {

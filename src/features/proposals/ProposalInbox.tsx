@@ -44,6 +44,8 @@ export function ProposalInbox({
   const invalidate = useInvalidate();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<AcceptResult | null>(null);
+  /** ProposalReview 回传的当前忽略数：安全提示与「将写入」计数都靠它动态更新 */
+  const [ignoredCount, setIgnoredCount] = useState(0);
 
   const { data, loading } = useRepoQuery(
     async (repo) => {
@@ -114,19 +116,25 @@ export function ProposalInbox({
 
   // 归档批次的安全默认：只把「对已有知识条目的合并/替换」作为初始忽略。
   // 摘要/进展的 replace 默认仍选中 —— 每章归档都有进展 replace，若也忽略，
-  // 作者得逐章手动恢复，摘要链反而容易漏。计数指初始状态，恢复一条后即变为选中。
+  // 作者得逐章手动纳入，摘要链反而容易漏。计数指默认不选条数，纳入一条后即时更新。
   const defaultIgnoredIds = defaultIgnoreEntryOverwrites
     ? proposals
         .filter((proposal) => proposal.target === 'knowledgeEntry' && proposal.action !== 'create')
         .map((proposal) => proposal.id)
     : [];
+  const totalCount = proposals.length;
+  /** 底部采用按钮只计入将写入的项：总数 - 当前忽略数 */
+  const writeCount = Math.max(0, totalCount - ignoredCount);
+  const safetyText =
+    ignoredCount > 0
+      ? `本批共 ${totalCount} 项，其中 ${defaultIgnoredIds.length} 条对已有条目的合并/替换默认不选；当前还有 ${ignoredCount} 条跳过（底部「采用本批」只计入将写入的 ${writeCount} 项）。`
+      : `本批共 ${totalCount} 项，其中 ${defaultIgnoredIds.length} 条对已有条目的合并/替换已全部纳入（将写入 ${writeCount} 项）。`;
 
   return (
     <div className="flex flex-col gap-3">
       {safetyNotice && defaultIgnoredIds.length > 0 ? (
         <p className="rounded-xl bg-accent-soft px-3 py-2.5 text-xs leading-relaxed text-accent">
-          本批含 {defaultIgnoredIds.length}{' '}
-          条对已有条目的合并/替换，已默认不选；展开核对后点「恢复」才会写入。
+          {safetyText}
         </p>
       ) : null}
       {result && result.failed.length > 0 ? (
@@ -152,6 +160,7 @@ export function ProposalInbox({
         {...(acceptAllLabel ? { acceptAllLabel } : {})}
         defaultExpandFirst={defaultExpandFirst}
         {...(defaultIgnoredIds.length > 0 ? { initiallyIgnoredIds: defaultIgnoredIds } : {})}
+        onIgnoredChange={setIgnoredCount}
       />
     </div>
   );

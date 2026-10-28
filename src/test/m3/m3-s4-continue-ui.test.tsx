@@ -126,6 +126,12 @@ describe('M3-S4 · 入口与互斥', () => {
     await renderPage();
     expect(await screen.findByRole('button', { name: '规划后续 3–5 章大纲' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '按已有章节生成大纲' })).not.toBeInTheDocument();
+    // M3.1：大纲区块说明三种规划入口的关系
+    expect(
+      screen.getByText(
+        /三种规划入口：细化＝拆当前节点；自动大纲＝按已有章节补结构或往后规划；互动推演沉淀＝先把推演出来的线变成大纲。/u,
+      ),
+    ).toBeInTheDocument();
   });
 
   it('无大纲但有主线章节 → 显示回溯入口、不显示续写入口（互斥）', async () => {
@@ -237,6 +243,8 @@ describe('M3-S4 · 生成 → 提案 → 采用', () => {
     // ProposalInbox 的提案是异步加载的：等采用按钮出现再断言/点击，避免全量并发下的竞态
     const adoptButton = await within(dialog).findByRole('button', { name: '采用这份续写' });
     expect(adoptButton).toBeInTheDocument();
+    // M3.1：续写提案只有 1 条 → 不再渲染逐条「采用这条」（避免两个采用入口）
+    expect(within(dialog).queryByRole('button', { name: '采用这条' })).not.toBeInTheDocument();
     const pending = await harness.repository.listProposals(novel.id, { status: 'pending' });
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({ target: 'outlineTree', action: 'create' });

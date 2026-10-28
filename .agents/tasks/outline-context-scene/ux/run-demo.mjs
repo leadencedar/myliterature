@@ -680,9 +680,9 @@ async function main() {
 
     // M2.1：安全默认——只有「对已有条目的合并/替换」被标记为忽略；摘要/进展默认选中
     await shot(page, 'M2.1-a', 'm2.1-01-archive-safety-mobile.png', 'M2.1：安全提示 + 条目合并默认「已标记为忽略」；摘要/进展默认选中');
-    await inboxDialog.getByRole('button', { name: '恢复' }).first().click();
+    await inboxDialog.getByRole('button', { name: '纳入本批' }).first().click();
     await page.waitForTimeout(250);
-    await shot(page, 'M2.1-b', 'm2.1-02-archive-restored-mobile.png', 'M2.1：点「恢复」后条目合并重新纳入（采用本批（4））');
+    await shot(page, 'M2.1-b', 'm2.1-02-archive-restored-mobile.png', 'M2.1：点「纳入本批」后条目合并重新纳入（采用本批（4））');
     const auditBlock = page.getByText('本批伏笔流水').locator('xpath=..');
     await auditBlock.screenshot({ path: join(SHOTS_DIR, 'm2.1-03-thread-audit-mobile.png') });
     log('M2.1-c', '截图 m2.1-03-thread-audit-mobile.png', 'M2.1：本章伏笔流水（新埋/收束/现存 + 误收束提示）');

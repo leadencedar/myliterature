@@ -724,6 +724,7 @@ describe('回溯大纲（按已有章节生成）', () => {
 
     expect(await screen.findByRole('button', { name: '按已有章节生成大纲' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '添加第一个大纲节点' })).toBeInTheDocument();
+    expect(screen.getByText(/三种规划入口：细化＝拆当前节点/u)).toBeInTheDocument();
   });
 
   it('没有章节时不显示入口', async () => {
@@ -960,6 +961,8 @@ describe('前沿续写（规划后续 3–5 章大纲）', () => {
     await waitForLoaded();
     expect(await screen.findByRole('button', { name: '规划后续 3–5 章大纲' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '按已有章节生成大纲' })).not.toBeInTheDocument();
+    // 大纲区块说明三个规划入口的关系
+    expect(screen.getByText(/三种规划入口：细化＝拆当前节点/u)).toBeInTheDocument();
   });
 
   it('空作品两个入口都不显示', async () => {

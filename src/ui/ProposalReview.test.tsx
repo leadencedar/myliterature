@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { buildCreateProposal, buildMergeProposal } from '@/proposal/build';
@@ -198,14 +198,14 @@ describe('提案预览 · 取舍与批量操作', () => {
     expect(items.map((item) => item.proposal.label)).toEqual(['人物 · 沈清']);
   });
 
-  it('忽略后可以恢复', async () => {
+  it('忽略后可以纳入本批', async () => {
     const user = userEvent.setup();
     renderReview([createProposal('人物 · 林越', { title: '林越' })]);
 
     await user.click(screen.getByRole('button', { name: '忽略这条' }));
     expect(screen.getByText('已标记为忽略')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: '恢复' }));
+    await user.click(screen.getByRole('button', { name: '纳入本批' }));
     expect(screen.queryByText('已标记为忽略')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '全部采用' })).toBeInTheDocument();
   });
@@ -294,7 +294,7 @@ describe('提案预览 · 初始忽略（归档安全默认 M2.1）', () => {
     expect(items.map((item) => item.proposal.label)).toEqual(['世界观设定 · 灵潮']);
   });
 
-  it('点「恢复」后重新纳入本批', async () => {
+  it('点「纳入本批」后重新纳入', async () => {
     const user = userEvent.setup();
     const merged = buildMergeProposal({
       ...COMMON,
@@ -308,7 +308,7 @@ describe('提案预览 · 初始忽略（归档安全默认 M2.1）', () => {
       initiallyIgnoredIds: [merged.id],
     });
 
-    await user.click(screen.getByRole('button', { name: '恢复' }));
+    await user.click(screen.getByRole('button', { name: '纳入本批' }));
     expect(screen.queryByText('已标记为忽略')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '全部采用（2）' }));
 
@@ -328,5 +328,55 @@ describe('提案预览 · 初始忽略（归档安全默认 M2.1）', () => {
 
     expect(screen.queryByText('已标记为忽略')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '全部采用（2）' })).toBeInTheDocument();
+  });
+});
+
+describe('提案预览 · 单提案与忽略数回调（M3.1）', () => {
+  it('只有一条提案时不再渲染逐条「采用这条」', () => {
+    const onAcceptOne = vi.fn<(item: EditedProposal) => void>();
+    renderReview([createProposal('人物 · 林越', { title: '林越' })], { onAcceptOne });
+
+    expect(screen.queryByRole('button', { name: '采用这条' })).not.toBeInTheDocument();
+    // 底部采用按钮仍在
+    expect(screen.getByRole('button', { name: '全部采用' })).toBeInTheDocument();
+  });
+
+  it('多条提案时仍保留逐条「采用这条」', async () => {
+    const user = userEvent.setup();
+    const onAcceptOne = vi.fn<(item: EditedProposal) => void>();
+    renderReview(
+      [
+        createProposal('人物 · 林越', { title: '林越' }),
+        createProposal('人物 · 沈清', { title: '沈清' }),
+      ],
+      { onAcceptOne },
+    );
+
+    // 逐条按钮在展开区里：默认只展开第一条，先展开其余
+    for (const toggle of screen.getAllByRole('button', { expanded: false })) {
+      await user.click(toggle);
+    }
+    expect(screen.getAllByRole('button', { name: '采用这条' })).toHaveLength(2);
+  });
+
+  it('onIgnoredChange 在初始与纳入本批后回传当前忽略数', async () => {
+    const user = userEvent.setup();
+    const merged = buildMergeProposal({
+      ...COMMON,
+      label: '人物 · 裴照',
+      targetId: 'e1',
+      current: { title: '裴照' },
+      incoming: { summary: '整合后的摘要' },
+    });
+    const onIgnoredChange = vi.fn<(count: number) => void>();
+    renderReview([merged, createProposal('世界观设定 · 灵潮', { title: '灵潮' })], {
+      initiallyIgnoredIds: [merged.id],
+      onIgnoredChange,
+    });
+
+    // 初始也触发：1 条默认不选
+    await waitFor(() => expect(onIgnoredChange).toHaveBeenLastCalledWith(1));
+    await user.click(screen.getByRole('button', { name: '纳入本批' }));
+    await waitFor(() => expect(onIgnoredChange).toHaveBeenLastCalledWith(0));
   });
 });

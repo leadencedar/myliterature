@@ -83,7 +83,7 @@ describe('M2.1-S2 · ProposalReview 初始忽略（归档安全默认单元）',
       '人物 · 裴照',
     ]);
 
-    await user.click(screen.getByRole('button', { name: '恢复' }));
+    await user.click(screen.getByRole('button', { name: '纳入本批' }));
     expect(screen.queryByText('已标记为忽略')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '全部采用（2）' }));
     expect(onAcceptAll.mock.calls[1]![0].map((item) => item.proposal.label)).toEqual([
@@ -201,9 +201,10 @@ describe('M2.1-S2 · 归档 ProposalInbox 安全默认', () => {
       />,
     );
 
+    // M3.1 动态提示：共 3 项，其中 1 条合并默认不选，当前 1 条跳过 → 将写入 2
     expect(
       await screen.findByText(
-        /本批含 1 条对已有条目的合并\/替换，已默认不选；展开核对后点「恢复」才会写入。/u,
+        '本批共 3 项，其中 1 条对已有条目的合并/替换默认不选；当前还有 1 条跳过（底部「采用本批」只计入将写入的 2 项）。',
       ),
     ).toBeInTheDocument();
     expect(screen.getAllByText('已标记为忽略')).toHaveLength(1);
@@ -240,7 +241,7 @@ describe('M2.1-S2 · 归档 ProposalInbox 安全默认', () => {
       />,
     );
 
-    const restore = await screen.findByRole('button', { name: '恢复' });
+    const restore = await screen.findByRole('button', { name: '纳入本批' });
     await user.click(restore);
     await user.click(screen.getByRole('button', { name: /采用本批（3）/u }));
 
@@ -253,6 +254,78 @@ describe('M2.1-S2 · 归档 ProposalInbox 安全默认', () => {
       (item) => item.id === existingEntryId,
     )!;
     expect(entry.fields.identity).toBe('新身份');
+  });
+
+  it('动态提示三态：初始跳过 → 纳入一条后更新 → 全部纳入（将写入 3 项）', async () => {
+    const user = userEvent.setup();
+    harness.renderUI(
+      <ProposalInbox
+        novelId={novel.id}
+        batchId={batchId}
+        acceptAllLabel="采用本批"
+        defaultExpandFirst={false}
+        defaultIgnoreEntryOverwrites
+        safetyNotice
+      />,
+    );
+
+    expect(
+      await screen.findByText(
+        '本批共 3 项，其中 1 条对已有条目的合并/替换默认不选；当前还有 1 条跳过（底部「采用本批」只计入将写入的 2 项）。',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /采用本批（2）/u })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '纳入本批' }));
+    expect(
+      screen.getByText('本批共 3 项，其中 1 条对已有条目的合并/替换已全部纳入（将写入 3 项）。'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /采用本批（3）/u })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /采用本批（3）/u }));
+    await waitFor(async () => {
+      expect(await harness.repository.listProposals(novel.id, { status: 'pending' })).toHaveLength(
+        0,
+      );
+    });
+  });
+
+  it('单提案只有底部采用按钮；多提案仍可逐条采用', async () => {
+    const singleBatch = `batch-single-${crypto.randomUUID()}`;
+    await harness.repository.createProposals([
+      buildCreateProposal({
+        novelId: novel.id,
+        batchId: singleBatch,
+        origin: 'extract',
+        target: 'chapterSummary',
+        label: '第 2 章摘要',
+        specs: fieldSpecsFor('chapterSummary'),
+        payload: {
+          chapterId,
+          summary: '单提案摘要。',
+          keyEvents: [],
+          appearingEntryIds: [],
+          openThreads: [],
+        },
+      }),
+    ]);
+
+    harness.renderUI(
+      <ProposalInbox novelId={novel.id} batchId={singleBatch} acceptAllLabel="采用本批" />,
+    );
+    expect(await screen.findByRole('button', { name: '采用本批' })).toBeInTheDocument();
+    // 单提案不再渲染逐条「采用这条」：与底部按钮同义
+    expect(screen.queryByRole('button', { name: '采用这条' })).not.toBeInTheDocument();
+  });
+
+  it('多提案展开后仍有逐条「采用这条」', async () => {
+    harness.renderUI(
+      <ProposalInbox novelId={novel.id} batchId={batchId} acceptAllLabel="采用本批" />,
+    );
+
+    // 默认展开第一条（多提案），逐条采用入口保留
+    expect(await screen.findByRole('button', { name: '采用这条' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /采用本批/u })).toBeInTheDocument();
   });
 
   it('不传安全默认 props：全部默认选中、无提示（其他收件箱行为不变）', async () => {

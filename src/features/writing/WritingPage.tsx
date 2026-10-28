@@ -24,6 +24,13 @@ import { ChapterListItem } from './ChapterListItem';
 import { SideStorySheet } from './SideStorySheet';
 
 /**
+ * 大纲区块三个规划入口的关系：给作者一句「什么时候用哪个」。
+ * 放在 description 里而不是另起一块说明，避免把页面撑长。
+ */
+const OUTLINE_ENTRY_NOTE =
+  '三种规划入口：细化＝拆当前节点；自动大纲＝按已有章节补结构或往后规划；互动推演沉淀＝先把推演出来的线变成大纲。';
+
+/**
  * 主线最新一份摘要的累计伏笔。
  *
  * 摘要里的 openThreads 本身就是「截至该章仍未收束」的累计值（见 chapterSummary.ts），
@@ -352,6 +359,8 @@ function WritingContent({ novel }: { novel: Novel }) {
               ) : undefined
             }
           >
+            {/* 三入口说明放正文顶部：放 header 会把 390px 下的「规划后续 3–5 章大纲」按钮挤成竖排 */}
+            <p className="mb-3 text-xs leading-relaxed text-ink-500">{OUTLINE_ENTRY_NOTE}</p>
             {outline.length > 0 ? (
               <OutlineTreeView
                 nodes={outline}

@@ -66,7 +66,7 @@ afterEach(async () => {
 
 // ---------------------------------------------------------------- mock
 
-function archivePayload(entriesCount: number) {
+function archivePayload(entriesCount: number, resolvedThreads: string[] = []) {
   return {
     entries: Array.from({ length: entriesCount }, (_, index) => ({
       categoryName: characterCategory.name,
@@ -79,7 +79,7 @@ function archivePayload(entriesCount: number) {
     keyEvents: ['追兵破门', '林越翻窗'],
     appearingEntries: [],
     newOpenThreads: ['追兵背后是谁'],
-    resolvedThreads: [],
+    resolvedThreads,
     rollingSummary: '林越从雪夜突围，追兵不退。',
   };
 }
@@ -87,6 +87,7 @@ function archivePayload(entriesCount: number) {
 interface ApiStubOptions {
   entriesCount?: number;
   failFirstNonStream?: boolean;
+  resolvedThreads?: string[];
 }
 
 function stubApi(options: ApiStubOptions = {}) {
@@ -103,7 +104,11 @@ function stubApi(options: ApiStubOptions = {}) {
       return Promise.resolve(jsonResponse({ error: { message: '归档服务暂时不可用' } }, 500));
     }
     return Promise.resolve(
-      jsonResponse(completion(JSON.stringify(archivePayload(options.entriesCount ?? 2)))),
+      jsonResponse(
+        completion(
+          JSON.stringify(archivePayload(options.entriesCount ?? 2, options.resolvedThreads)),
+        ),
+      ),
     );
   });
   vi.stubGlobal('fetch', fetchSpy);
@@ -187,7 +192,12 @@ describe('M2-S3 · 查看 inbox：关闭不写、采用才落库', () => {
     expect(within(dialog).getByRole('button', { name: /采用本批/u })).toBeInTheDocument();
     // M2.1 伏笔流水：新埋 1 / 收束 0 / 现存 1 + 误收束提示
     expect(within(dialog).getByText('本批伏笔流水')).toBeInTheDocument();
-    expect(within(dialog).getByText(/第 1 章：新埋 1 \/ 收束 0 \/ 现存 1/u)).toBeInTheDocument();
+    // M3.1：无历史伏笔时「现存」与「新埋」完全重合，计数行注明、明细不重复
+    expect(
+      within(dialog).getByText(/第 1 章：新埋 1 \/ 收束 0 \/ 现存 1（现存均为本章新埋）/u),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText('新埋：追兵背后是谁')).toBeInTheDocument();
+    expect(within(dialog).queryByText(/现存：追兵背后是谁/u)).not.toBeInTheDocument();
     expect(within(dialog).getByText(/若误收束，在摘要的「未收束伏笔」里加回/u)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: '关闭' }));
     await waitFor(() =>
@@ -220,9 +230,10 @@ describe('M2-S3 · 查看 inbox：关闭不写、采用才落库', () => {
 
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
+    // M3.1 动态安全提示：初始 1 条跳过、将写入 2
     expect(
       within(dialog).getByText(
-        /本批含 1 条对已有条目的合并\/替换，已默认不选；展开核对后点「恢复」才会写入。/u,
+        '本批共 3 项，其中 1 条对已有条目的合并/替换默认不选；当前还有 1 条跳过（底部「采用本批」只计入将写入的 2 项）。',
       ),
     ).toBeInTheDocument();
     expect(within(dialog).getAllByText('已标记为忽略')).toHaveLength(1);
@@ -247,6 +258,21 @@ describe('M2-S3 · 查看 inbox：关闭不写、采用才落库', () => {
     expect(pending.map((proposal) => proposal.action)).toEqual(['merge']);
   });
 
+  it('有历史伏笔时流水仍显示新埋/收束/现存三类，不做去重', async () => {
+    stubApi({ entriesCount: 0, resolvedThreads: ['河灯旧案'] });
+    const user = await enterEditor();
+    await markDone(user);
+    await screen.findByText(DONE_ROW);
+
+    await user.click(screen.getByRole('button', { name: '查看' }));
+    const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
+    expect(within(dialog).getByText(/第 1 章：新埋 1 \/ 收束 1 \/ 现存 1/u)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/现存均为本章新埋/u)).not.toBeInTheDocument();
+    expect(
+      within(dialog).getByText('新埋：追兵背后是谁；收束：河灯旧案；现存：追兵背后是谁'),
+    ).toBeInTheDocument();
+  });
+
   it('恢复默认忽略的条目合并后随本批写入，旧条目被更新', async () => {
     const existing = await harness.repository.createEntry(novel.id, {
       categoryId: characterCategory.id,
@@ -261,7 +287,13 @@ describe('M2-S3 · 查看 inbox：关闭不写、采用才落库', () => {
 
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
-    await user.click(within(dialog).getByRole('button', { name: '恢复' }));
+    await user.click(within(dialog).getByRole('button', { name: '纳入本批' }));
+    // 纳入后提示即时变为「已全部纳入」，按钮数只算将写入项
+    expect(
+      within(dialog).getByText(
+        '本批共 3 项，其中 1 条对已有条目的合并/替换已全部纳入（将写入 3 项）。',
+      ),
+    ).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: /采用本批（3）/u }));
 
     await waitFor(async () => {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FieldDiff, Proposal } from '@/domain/schema';
 import { applyEdits, summarizeDiff } from '@/proposal/diff';
 import { displayFieldValue, getFieldValue, type FieldSpec } from '@/proposal/fields';
@@ -31,6 +31,11 @@ interface ProposalReviewProps {
    * 底部采用按钮会排除它们；不传时行为与之前逐字节一致。
    */
   initiallyIgnoredIds?: string[];
+  /**
+   * 忽略数变化时回调（含初始值）：归档安全提示据此显示「还有 X 条跳过 / 已全部纳入」。
+   * 只回传数量，不暴露内部集合，避免调用方依赖忽略项 id。
+   */
+  onIgnoredChange?: (ignoredCount: number) => void;
 }
 
 const ACTION_LABELS: Record<Proposal['action'], string> = {
@@ -70,6 +75,7 @@ export function ProposalReview({
   acceptAllLabel = '全部采用',
   defaultExpandFirst = true,
   initiallyIgnoredIds,
+  onIgnoredChange,
 }: ProposalReviewProps) {
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     const first = proposals[0];
@@ -78,6 +84,12 @@ export function ProposalReview({
   const [edits, setEdits] = useState<Record<string, Record<string, string>>>({});
   // 初始忽略只决定挂载时的集合；之后仍走现有的忽略/恢复交互
   const [ignored, setIgnored] = useState<Set<string>>(() => new Set(initiallyIgnoredIds ?? []));
+  // 用 ref 持有回调：父级每次渲染都可能传新函数，但只有忽略集合变化才需要通知
+  const onIgnoredChangeRef = useRef(onIgnoredChange);
+  onIgnoredChangeRef.current = onIgnoredChange;
+  useEffect(() => {
+    onIgnoredChangeRef.current?.(ignored.size);
+  }, [ignored]);
 
   const specsById = useMemo(() => {
     const map = new Map<string, FieldSpec[]>();
@@ -206,7 +218,8 @@ export function ProposalReview({
                   </div>
 
                   <div className="mt-4 flex flex-wrap gap-2">
-                    {onAcceptOne ? (
+                    {/* 只有一条提案时，逐条「采用这条」与底部按钮同义：不再渲染，避免两个采用入口 */}
+                    {onAcceptOne && proposals.length > 1 ? (
                       <Button
                         size="sm"
                         variant="primary"
@@ -255,7 +268,7 @@ export function ProposalReview({
                       })
                     }
                   >
-                    恢复
+                    纳入本批
                   </Button>
                 </div>
               ) : null}
