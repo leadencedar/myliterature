@@ -1,0 +1,21 @@
+[2026-10-28T14:48:14.813Z] 00 | dev server 就绪 | http://localhost:5201
+[2026-10-28T14:48:14.895Z] 00 | 启动 chrome-headless-shell | /Users/leadencedar/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell
+[2026-10-28T14:48:15.544Z] seed | iPhone 13 种子数据完成 | 连载作品 + 导入旧稿十章（10 章无大纲）
+[2026-10-28T14:48:16.147Z] check | iPhone 13 / 写作页（大纲区） | overflow=false (doc 390 / body 390 / inner 390) buttons=规划后续 3–5 章大纲:ok
+[2026-10-28T14:48:16.490Z] shot | 截图 device-mobile-writing.png | iPhone 13：写作页大纲区
+[2026-10-28T14:48:17.133Z] check | iPhone 13 / 回溯预览 | overflow=false (doc 390 / body 390 / inner 390) buttons=生成 10 个章节节点:ok
+[2026-10-28T14:48:17.473Z] shot | 截图 device-mobile-backfill.png | iPhone 13：回溯预览（10 章）
+[2026-10-28T14:48:18.109Z] check | iPhone 13 / 续写面板 | overflow=false (doc 390 / body 390 / inner 390) buttons=规划 3 章大纲:ok,3 章:ok
+[2026-10-28T14:48:18.297Z] check | iPhone 13 / 归档收件箱 | 本章摘要与设定待确认 摘要、进展与知识库条目都在这里确认，采用前不会写入。 本批伏笔流水 第 1 章：新埋 2 / 收束 1 / 现存 2 新埋：旧簪的来历、青冥宗是否还有人活着；收束：河灯旧案；现存：旧簪的来历、青冥宗是否还有人活着 若误收束，在摘要的「未收束伏笔」里加回（展开摘要提案编辑即可）。 本批共 4 项，其中 1 条对已有条目的合并/替换默认不选；当前还有 1 条跳过（底部「采用本批」只计入将写入的 3 项）。 第 1 章摘
+[2026-10-28T14:48:18.461Z] check | iPhone 13 / 归档收件箱 + M2.1 安全提示 | overflow=false (doc 390 / body 390 / inner 390) buttons=纳入本批:ok,采用本批:ok
+[2026-10-28T14:48:18.874Z] shot | 截图 device-mobile-archive.png | iPhone 13：归档收件箱 + 安全提示
+[2026-10-28T14:48:19.761Z] check | iPhone 13 刷新持久化 | IDB novels=2 chapters=11 outlines=2；localStorage keys=5（archive-batch 1）
+[2026-10-28T14:48:20.416Z] seed | Desktop 1280×900 种子数据完成 | 连载作品 + 导入旧稿十章（10 章无大纲）
+[2026-10-28T14:48:21.001Z] check | Desktop 1280×900 / 写作页（大纲区） | overflow=false (doc 1280 / body 1280 / inner 1280) buttons=规划后续 3–5 章大纲:ok
+[2026-10-28T14:48:21.269Z] shot | 截图 device-desktop-writing.png | Desktop 1280×900：写作页大纲区
+[2026-10-28T14:48:21.903Z] check | Desktop 1280×900 / 回溯预览 | overflow=false (doc 1280 / body 1280 / inner 1280) buttons=生成 10 个章节节点:ok
+[2026-10-28T14:48:22.547Z] check | Desktop 1280×900 / 续写面板 | overflow=false (doc 1280 / body 1280 / inner 1280) buttons=规划 3 章大纲:ok,3 章:ok
+[2026-10-28T14:48:22.697Z] check | Desktop 1280×900 / 归档收件箱 | 本章摘要与设定待确认 摘要、进展与知识库条目都在这里确认，采用前不会写入。 本批伏笔流水 第 1 章：新埋 2 / 收束 1 / 现存 2 新埋：旧簪的来历、青冥宗是否还有人活着；收束：河灯旧案；现存：旧簪的来历、青冥宗是否还有人活着 若误收束，在摘要的「未收束伏笔」里加回（展开摘要提案编辑即可）。 本批共 4 项，其中 1 条对已有条目的合并/替换默认不选；当前还有 1 条跳过（底部「采用本批」只计入将写入的 3 项）。 第 1 章摘
+[2026-10-28T14:48:22.861Z] check | Desktop 1280×900 / 归档收件箱 + M2.1 安全提示 | overflow=false (doc 1280 / body 1280 / inner 1280) buttons=纳入本批:ok,采用本批:ok
+[2026-10-28T14:48:23.737Z] check | Desktop 1280×900 刷新持久化 | IDB novels=2 chapters=11 outlines=2；localStorage keys=5（archive-batch 1）
+[2026-10-28T14:48:23.739Z] done | 检查完成 | checks=8 errors=0 报告=ux/device-check/report.md
