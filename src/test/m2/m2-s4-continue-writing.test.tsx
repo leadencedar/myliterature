@@ -420,3 +420,105 @@ describe('M2-S4 · 续写截断/中止语义', () => {
     await user.click(within(confirm).getByRole('button', { name: '取消' }));
   });
 });
+
+describe('M3.2 · 超出目标可见（软提醒，不自动压缩）', () => {
+  it('120%（3600/3000）：标题「生成完成（超出目标）」+「本章明显超出目标」+ 多 600 字说明；只有 1 次请求', async () => {
+    const { context } = await setupChapter(3000);
+    const { fetchSpy } = stubLlm([{ deltas: ['字'.repeat(3600)] }]); // 完整结束（无 finishReason）
+    const { user } = renderSheet(context);
+    await startGeneration(user);
+
+    expect(headerWords()).toBe(3600);
+    expect(await screen.findByText('生成完成（超出目标）')).toBeInTheDocument();
+    expect(screen.getByText('本章明显超出目标')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /比目标多约 600 字；采用后可手动删减，或把更紧凑的要求写进「本章额外要求」再生成。不自动压缩，也不硬卡字数。/u,
+      ),
+    ).toBeInTheDocument();
+    // 只提示：不自动压缩/改写，也不多发请求
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 400));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('110%（3300/3000）：无「超出目标」提示，标题仍「生成完成」', async () => {
+    const { context } = await setupChapter(3000);
+    stubLlm([{ deltas: ['字'.repeat(3300)] }]);
+    const { user } = renderSheet(context);
+    await startGeneration(user);
+
+    expect(headerWords()).toBe(3300);
+    expect(screen.getByText('生成完成')).toBeInTheDocument();
+    expect(screen.queryByText('生成完成（超出目标）')).not.toBeInTheDocument();
+    expect(screen.queryByText('本章明显超出目标')).not.toBeInTheDocument();
+  });
+
+  it('115% 边界：3449 不提示；3450 提示多 450 字（代码为严格 >，3000×1.15 浮点=3449.999…）', async () => {
+    // 目标 3000 → 1.15× 在 JS 里是 3449.9999999999995，因此 3450 才算「超出」；
+    // 这里按实现契约断言整数边界，避免把浮点误差当成产品行为
+    const exact = await setupChapter(3000);
+    stubLlm([{ deltas: ['字'.repeat(3449)] }]);
+    const first = renderSheet(exact.context);
+    await startGeneration(first.user);
+    expect(await screen.findByText('生成完成')).toBeInTheDocument();
+    expect(screen.queryByText('本章明显超出目标')).not.toBeInTheDocument();
+    first.unmount();
+
+    const above = await setupChapter(3000);
+    stubLlm([{ deltas: ['字'.repeat(3450)] }]);
+    const second = renderSheet(above.context);
+    await startGeneration(second.user);
+    expect(await screen.findByText('生成完成（超出目标）')).toBeInTheDocument();
+    expect(screen.getByText(/比目标多约 450 字/u)).toBeInTheDocument();
+    second.unmount();
+  });
+
+  it('100%（3000/3000）：生成完成，不提示超出、不提示接近', async () => {
+    const { context } = await setupChapter(3000);
+    stubLlm([{ deltas: ['字'.repeat(3000)] }]);
+    const { user } = renderSheet(context);
+    await startGeneration(user);
+
+    expect(headerWords()).toBe(3000);
+    expect(screen.getByText('生成完成')).toBeInTheDocument();
+    expect(screen.queryByText('本章明显超出目标')).not.toBeInTheDocument();
+    expect(screen.queryByText('生成完成（接近目标）')).not.toBeInTheDocument();
+  });
+
+  it('90%（2700/3000）：接近目标，且不提示超出', async () => {
+    const { context } = await setupChapter(3000);
+    stubLlm([{ deltas: ['字'.repeat(2700)] }]);
+    const { user } = renderSheet(context);
+    await startGeneration(user);
+
+    expect(headerWords()).toBe(2700);
+    expect(screen.getByText('生成完成（接近目标）')).toBeInTheDocument();
+    expect(screen.queryByText('本章明显超出目标')).not.toBeInTheDocument();
+    expect(screen.queryByText(/比目标多约/u)).not.toBeInTheDocument();
+  });
+
+  it('截断且超字数：标题仍「生成未完成」，不显示超出提示', async () => {
+    const { context } = await setupChapter(3000);
+    stubLlm([{ deltas: ['字'.repeat(3600)], finishReason: 'length' }]);
+    const { user } = renderSheet(context);
+    await startGeneration(user);
+
+    expect(await screen.findByText('生成未完成')).toBeInTheDocument();
+    expect(screen.queryByText('生成完成（超出目标）')).not.toBeInTheDocument();
+    expect(screen.queryByText('本章明显超出目标')).not.toBeInTheDocument();
+  });
+
+  it('生成中断且超字数：仍「生成未完成」，不显示超出提示，也不发第二次请求', async () => {
+    const { context } = await setupChapter(3000);
+    const { fetchSpy } = stubLlm([{ abortDeltas: ['字'.repeat(3600)] }]);
+    const { user } = renderSheet(context);
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+    await screen.findByRole('button', { name: '停止生成' });
+    await user.click(screen.getByRole('button', { name: '停止生成' }));
+
+    expect(await screen.findByText('生成未完成')).toBeInTheDocument();
+    expect(screen.queryByText('生成完成（超出目标）')).not.toBeInTheDocument();
+    expect(screen.queryByText('本章明显超出目标')).not.toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});

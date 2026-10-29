@@ -126,6 +126,9 @@ const FRONTIER_RESULT = {
 /** 继续补写（S4）的假追加正文：约 2600 字，让目标 3000 字的章节补到 85% 以上 */
 const CONTINUE_TEXT = '船到河心，风更急了，沈砚压着斗笠没有说话。'.repeat(100);
 
+/** M3.2 超出目标演示用假正文：约 5000 字（目标 4000 的 125%，触发「生成完成（超出目标）」） */
+const OVERLENGTH_TEXT = '超额章写满了多余的环境与心理描写，需要作者自己删减。'.repeat(193);
+
 /** chapter-draft（流式）的假正文：约 700 字，末尾故意 finish_reason:"length" 演示截断 */
 const CHAPTER_TEXT = [
   '渡口的风比记忆里更冷。',
@@ -210,12 +213,17 @@ async function installModelMock(page, mockLog) {
     if (stream) {
       // 生成本章 = 2 条 messages（system+user）；继续补写 = 4 条（多 assistant 正文与续写指令）
       const isContinue = messages.length >= 4;
+      // M3.2 超出目标演示：目标 4000 字 → max_tokens=8000（其它章节是 6200/8192）；
+      // 返回约 5000 字完整正文（无 finish_reason）→ 标题「生成完成（超出目标）」
+      const wantsOverlength = !isContinue && body.max_tokens === 8000;
       return route.fulfill({
         status: 200,
         headers: { ...corsHeaders(), 'content-type': 'text/event-stream; charset=utf-8' },
-        body: isContinue
-          ? buildSse(CONTINUE_TEXT, null)
-          : buildSse(CHAPTER_TEXT, 'length'),
+        body: wantsOverlength
+          ? buildSse(OVERLENGTH_TEXT, null)
+          : isContinue
+            ? buildSse(CONTINUE_TEXT, null)
+            : buildSse(CHAPTER_TEXT, 'length'),
       });
     }
     // outline-expand 的 user 里也有【本次要求】（拆成 N 个子节点），必须再按措辞区分：
@@ -481,6 +489,19 @@ async function main() {
         outlineNodeId: continueNode.id,
       });
 
+      // M3.2 演示：目标 4000 的第四章，生成约 5000 字（125%）→「生成完成（超出目标）」软提醒
+      const overlengthNode = await repo.createOutlineNode(novel.id, {
+        title: '第4章 超额章',
+        synopsis: '本章会明显超出目标字数。',
+        parentId: secondVolume.id,
+        targetWords: 4000,
+      });
+      const overlengthChapter = await repo.createChapter(novel.id, {
+        title: '超额章',
+        content: '',
+        outlineNodeId: overlengthNode.id,
+      });
+
       // M3 回溯演示：导入的旧稿作品（10 章、无大纲、部分章有摘要）
       const backfillNovel = await repo.createNovel({
         title: '旧稿十章',
@@ -517,6 +538,7 @@ async function main() {
         chapterId: chapter.id,
         doneChapterId: doneChapter.id,
         continueChapterId: continueChapter.id,
+        overlengthChapterId: overlengthChapter.id,
       };
     });
     log(
@@ -809,11 +831,34 @@ async function main() {
     log('M3-e', '采用续写后大纲树', await visibleText(page.locator('body'), 600));
     await shot(page, 'M3-5', 'm3-05-continue-adopted-mobile.png', 'M3：采用后新节点追加到末卷；已有章节/设定不变');
 
+    // 13) M3.2：超出目标可见（目标 4000，生成约 5000 字 = 125%）
+    await page.getByRole('button', { name: '继续写第 4 章' }).click();
+    await page
+      .getByRole('button', { name: '生成本章' })
+      .waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByRole('button', { name: '生成本章' }).click();
+    await waitText(page, '本次注入');
+    const overshootStart = page.getByRole('button', { name: '开始生成' });
+    await overshootStart.scrollIntoViewIfNeeded();
+    await overshootStart.click({ timeout: 20_000 });
+    await waitText(page, '本章明显超出目标', 20_000);
+    log(
+      'M3.2',
+      '超出目标软提醒',
+      await visibleText(page.getByText('本章明显超出目标').locator('xpath=..'), 400),
+    );
+    await shot(
+      page,
+      'M3.2',
+      'm3.2-overlength-mobile.png',
+      'M3.2：目标 4000 / 生成约 5000 字 → 生成完成（超出目标）+ 软提醒（不自动压缩）',
+    );
+
     // 9) 汇总
     log(
       '30',
       '走查完成',
-      `after 截图 11 张 + M2 截图 9 张 + M2.1 截图 3 张 + M3 截图 5 张；mock 请求 ${mockLog.length} 次（stream: ${mockLog.filter((item) => item.stream).length}）；页面异常 ${pageErrors.length} 个`,
+      `after 截图 11 张 + M2 截图 9 张 + M2.1 截图 3 张 + M3 截图 5 张 + M3.2 截图 1 张；mock 请求 ${mockLog.length} 次（stream: ${mockLog.filter((item) => item.stream).length}）；页面异常 ${pageErrors.length} 个`,
     );
 
     writeFileSync(join(SHOTS_DIR, 'walkthrough-data.json'), `${JSON.stringify({ seed, mockLog, pageErrors, transcript }, null, 2)}\n`);

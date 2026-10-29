@@ -497,3 +497,68 @@ describe('生成差额与手动继续补写（S4）', () => {
     expect(screen.getByText('生成未完成')).toBeInTheDocument();
   });
 });
+
+describe('超出目标的可见提示（M3.2）', () => {
+  /** 用指定目标渲染并生成，返回 fetch spy（用于确认只发了一次请求） */
+  async function renderAt(targetWords: number, written: number, finishReason?: string) {
+    const node = await harness.repository.createOutlineNode(context.novel.id, {
+      title: `第5章 ${targetWords}`,
+      parentId: volume.id,
+      targetWords,
+    });
+    const fetchSpy = stubStream(['字'.repeat(written)], finishReason);
+    const { user } = renderSheet({
+      outline: [...context.outline, node],
+      targetNodeId: node.id,
+    });
+    await generate(user);
+    return fetchSpy;
+  }
+
+  it('90%：仍是「接近目标」，无超出提示，也没有补写块', async () => {
+    await renderAt(1000, 900);
+
+    expect(screen.getByText('生成完成（接近目标）')).toBeInTheDocument();
+    expect(screen.queryByText(/超出目标/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/比目标多约/u)).not.toBeInTheDocument();
+    // 90% 已过 85% 门槛：不弹补写
+    expect(screen.queryByRole('button', { name: '继续补写' })).not.toBeInTheDocument();
+  });
+
+  it('100%：显示「生成完成」，无超出提示', async () => {
+    await renderAt(1000, 1000);
+
+    expect(screen.getByText('生成完成')).toBeInTheDocument();
+    expect(screen.queryByText(/超出目标/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/比目标多约/u)).not.toBeInTheDocument();
+  });
+
+  it('110%：仍显示「生成完成」，不提示超出', async () => {
+    await renderAt(1000, 1100);
+
+    expect(screen.getByText('生成完成')).toBeInTheDocument();
+    expect(screen.queryByText(/超出目标/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/比目标多约/u)).not.toBeInTheDocument();
+  });
+
+  it('120%：标题「生成完成（超出目标）」+ 只提醒不自动压缩，不新增请求/按钮', async () => {
+    const fetchSpy = await renderAt(1000, 1200);
+
+    expect(screen.getByText('生成完成（超出目标）')).toBeInTheDocument();
+    expect(screen.getByText(/比目标多约 200 字/u)).toBeInTheDocument();
+    expect(screen.getByText(/不自动压缩，也不硬卡字数/u)).toBeInTheDocument();
+    expect(screen.getByText(/采用后可手动删减/u)).toBeInTheDocument();
+    // 不新增「收束/压缩」之类的按钮，也不追加请求
+    expect(screen.queryByRole('button', { name: /压缩|收束|改写/u })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '继续补写' })).not.toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('截断时即使字数超出也不显示超出提示（未完成优先）', async () => {
+    await renderAt(1000, 1200, 'length');
+
+    expect(screen.getByText('生成未完成')).toBeInTheDocument();
+    expect(screen.queryByText(/超出目标/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/比目标多约/u)).not.toBeInTheDocument();
+  });
+});

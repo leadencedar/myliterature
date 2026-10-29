@@ -44,6 +44,11 @@ function isMaxTokensRejected(cause: unknown): boolean {
 
 /** 低于目标 85% 视为「没写够」：与 D4 的差额口径一致，但只提示、不制造写满的压力 */
 const SHORTFALL_RATIO = 0.85;
+/**
+ * 高于目标 115% 视为「明显超出」：只让作者看见，不自动压缩、不硬卡字数（M3.2）。
+ * 100%–115% 属于正常篇幅波动，不提示。
+ */
+const OVERSHOOT_RATIO = 1.15;
 
 /**
  * 续写指令。
@@ -370,6 +375,12 @@ export function GenerateChapterSheet({
   // 红框里已经写了「继续补写/重新生成」两条路，这里只留差额事实，避免同屏重复
   const shortfallMessage =
     remainingWords > 0 ? `比目标少约 ${remainingWords} 字。` : '生成未完成。';
+  /** 完整结果明显超出目标：只做可见提示，不触发任何自动处理 */
+  const showOvershoot =
+    phase.kind === 'done' &&
+    phase.incomplete === undefined &&
+    generatedWords > targetWords * OVERSHOOT_RATIO;
+  const overshootWords = Math.max(0, generatedWords - targetWords);
 
   return (
     <>
@@ -518,9 +529,11 @@ export function GenerateChapterSheet({
                   ? '正在写…'
                   : phase.incomplete
                     ? '生成未完成'
-                    : remainingWords > 0
-                      ? '生成完成（接近目标）'
-                      : '生成完成'}
+                    : showOvershoot
+                      ? '生成完成（超出目标）'
+                      : remainingWords > 0
+                        ? '生成完成（接近目标）'
+                        : '生成完成'}
               </p>
               {/* 结果旁边直接给出「已生成 / 目标」对照：截断时作者才知道差了多少 */}
               <p className="text-xs text-ink-500">
@@ -576,6 +589,17 @@ export function GenerateChapterSheet({
                 </Button>
                 <p className="text-xs leading-relaxed text-ink-500">
                   节拍已齐可直接标完成。补写只补本章还没落地的场景，不是凑字数；不会自动继续。
+                </p>
+              </div>
+            ) : null}
+
+            {/* 超出目标：只提醒可见，不自动压缩、也不硬卡字数（M3.2） */}
+            {phase.kind === 'done' && showOvershoot ? (
+              <div className="rounded-xl bg-paper-sunken px-3 py-2.5">
+                <p className="text-sm font-medium text-ink-700">本章明显超出目标</p>
+                <p className="text-xs leading-relaxed text-ink-500">
+                  比目标多约 {overshootWords}{' '}
+                  字；采用后可手动删减，或把更紧凑的要求写进「本章额外要求」再生成。不自动压缩，也不硬卡字数。
                 </p>
               </div>
             ) : null}

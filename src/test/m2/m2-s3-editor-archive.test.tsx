@@ -189,7 +189,8 @@ describe('M2-S3 · 查看 inbox：关闭不写、采用才落库', () => {
 
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
-    expect(within(dialog).getByRole('button', { name: /采用本批/u })).toBeInTheDocument();
+    // ProposalInbox 的提案异步加载：等底部采用按钮出现后再断言提示/流水
+    expect(await within(dialog).findByRole('button', { name: /采用本批/u })).toBeInTheDocument();
     // M2.1 伏笔流水：新埋 1 / 收束 0 / 现存 1 + 误收束提示
     expect(within(dialog).getByText('本批伏笔流水')).toBeInTheDocument();
     // M3.1：无历史伏笔时「现存」与「新埋」完全重合，计数行注明、明细不重复
@@ -230,9 +231,9 @@ describe('M2-S3 · 查看 inbox：关闭不写、采用才落库', () => {
 
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
-    // M3.1 动态安全提示：初始 1 条跳过、将写入 2
+    // M3.1 动态安全提示：初始 1 条跳过、将写入 2（ProposalInbox 异步加载，findByText 等待）
     expect(
-      within(dialog).getByText(
+      await within(dialog).findByText(
         '本批共 3 项，其中 1 条对已有条目的合并/替换默认不选；当前还有 1 条跳过（底部「采用本批」只计入将写入的 2 项）。',
       ),
     ).toBeInTheDocument();
@@ -287,10 +288,10 @@ describe('M2-S3 · 查看 inbox：关闭不写、采用才落库', () => {
 
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
-    await user.click(within(dialog).getByRole('button', { name: '纳入本批' }));
+    await user.click(await within(dialog).findByRole('button', { name: '纳入本批' }));
     // 纳入后提示即时变为「已全部纳入」，按钮数只算将写入项
     expect(
-      within(dialog).getByText(
+      await within(dialog).findByText(
         '本批共 3 项，其中 1 条对已有条目的合并/替换已全部纳入（将写入 3 项）。',
       ),
     ).toBeInTheDocument();
