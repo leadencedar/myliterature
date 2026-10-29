@@ -91,7 +91,14 @@ const ARCHIVE_CHAPTER_CONTENT = `雪落进青冥宗的第三进院落时，林�
 「我要是知道，早就不在这条河上撑船了。」
 裴照在旁边一直没有说话。等老船夫的背影快融进雪里，他才很轻地吐出一口气：「他在说谎。你六岁那年，你父亲已经死了。」
 他说完，提起纸灯往侧门外走。这一次，他的脚印是正的。`;
-const TARGET_WORDS = 1200;
+/**
+ * 整章生成的目标字数。默认 1200（短目标压力测试）；可用 LIVE_TARGET_WORDS 覆盖，
+ * 例如 3000 复测默认章长、6000 复测网文长章。
+ */
+const TARGET_WORDS = (() => {
+  const raw = Number.parseInt(process.env.LIVE_TARGET_WORDS ?? '1200', 10);
+  return Number.isFinite(raw) && raw >= 200 && raw <= 8000 ? raw : 1200;
+})();
 const LOONG_TONG_KEYWORDS = [
   '船夫',
   '茶博士',
@@ -499,8 +506,8 @@ describeLive('真实模型抽检（3 次调用）', () => {
     });
   }, 180_000);
 
-  it('C 整章 1200 字：一次 chapter-draft 流式生成', async () => {
-    await runCheck('chapter-draft-1200', async () => {
+  it(`C 整章 ${TARGET_WORDS} 字：一次 chapter-draft 流式生成`, async () => {
+    await runCheck(`chapter-draft-${TARGET_WORDS}`, async () => {
       const targetNode = fixtures.outline.find((node) => node.title === '第3章 雪夜')!;
       const builder = new SummaryChainContextBuilder();
       const built = builder.build({
