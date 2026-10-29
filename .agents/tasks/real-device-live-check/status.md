@@ -2,6 +2,8 @@
 
 ## 已完成
 
+- **真实模型抽检已跑（2026-10-29）**：3 次调用全部 ok；A 归档提取通过（3 条目、龙套 0）；B 前沿 3 章 12 场通过；C 整章 1200 字实际 2364 字（197%）→ 长度校准为下一步优先项。详见 `live-result.md`。
+
 ### 1. 真机形态（Chromium 设备模拟，非物理真机）
 
 `node .agents/tasks/outline-context-scene/ux/device-check.mjs` 可重复运行（自启自停 :5201）。
