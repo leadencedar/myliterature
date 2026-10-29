@@ -1557,12 +1557,20 @@ describe('检查文风（M4 S2）', () => {
     const dialog = await openStyleCheck(user);
     // 打开面板不发请求：只有点面板里的「检查文风」才调模型
     expect(bodies).toHaveLength(0);
+    // 面板 idle 交代成本与边界
+    expect(within(dialog).getByText(/本章约 \d+ 字，检查一次调用。/u)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/只对照风格档案与锚点，不逐个人物核对口吻。/u),
+    ).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: '检查文风' }));
 
     expect(await within(dialog).findByText(STYLE_CHECK_RESULT.summary)).toBeInTheDocument();
-    // 中性 severity 标签：不再像判决
+    // 中性 severity 标签：统一成程度一轴
     expect(within(dialog).getByText('差异较大')).toBeInTheDocument();
-    expect(within(dialog).queryByText(/明显偏离|局部偏离/u)).not.toBeInTheDocument();
+    expect(within(dialog).getByText('略有差异')).toBeInTheDocument();
+    expect(
+      within(dialog).queryByText(/明显偏离|局部偏离|局部差异|轻微差异/u),
+    ).not.toBeInTheDocument();
     expect(within(dialog).getByText('叙述距离')).toBeInTheDocument();
     // 每条同时显示原文与「差在哪」的依据
     expect(within(dialog).getAllByText(/原文：/u)).toHaveLength(2);

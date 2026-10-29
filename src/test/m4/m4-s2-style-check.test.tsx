@@ -232,9 +232,13 @@ describe('M4-S2 · Schema 与 prompt 单元', () => {
         issues: [{ dimension: 'd', severity: 'low', excerpt: 'e', suggestion: 's' }],
       }).success,
     ).toBe(false);
-    // M4-P1：中性 severity 标签（旧「明显偏离/局部偏离/轻微」已移除）
+    // M4.1：三档文案改为「差异较大 / 有所差异 / 略有差异」（旧「局部差异/轻微差异」移除）
     expect(STYLE_CHECK_SEVERITY_LABELS).toEqual({
       high: '差异较大',
+      medium: '有所差异',
+      low: '略有差异',
+    });
+    expect(STYLE_CHECK_SEVERITY_LABELS).not.toMatchObject({
       medium: '局部差异',
       low: '轻微差异',
     });
@@ -266,7 +270,11 @@ describe('M4-S2 · Schema 与 prompt 单元', () => {
     expect(system).toContain('basis');
     expect(system).toContain('句长、叙述距离、对话密度、意象密度');
     expect(system).toContain('差异较大');
+    expect(system).toContain('medium = 有所差异');
+    expect(system).toContain('low = 略有差异');
     expect(system).not.toContain('明显偏离');
+    expect(system).not.toContain('局部差异');
+    expect(system).not.toContain('轻微差异');
   });
 });
 
@@ -312,6 +320,11 @@ describe('M4-S2 · 编辑器 UI', () => {
     const dialog = await openStyleSheet(user);
     // 打开面板不请求
     expect(fetchSpy).not.toHaveBeenCalled();
+    // M4.1：idle 显示字数/一次调用/边界说明
+    expect(within(dialog).getByText(/本章约 \d+ 字，检查一次调用。/u)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText('只对照风格档案与锚点，不逐个人物核对口吻。'),
+    ).toBeInTheDocument();
 
     await user.click(within(dialog).getByRole('button', { name: '检查文风' }));
     expect(await within(dialog).findByText(CHECK_RESULT.summary)).toBeInTheDocument();
@@ -321,7 +334,9 @@ describe('M4-S2 · 编辑器 UI', () => {
     expect(bodies[0]!.model).toBe('deepseek-chat');
 
     expect(within(dialog).getByText('差异较大')).toBeInTheDocument();
-    expect(within(dialog).getByText('局部差异')).toBeInTheDocument();
+    expect(within(dialog).getByText('有所差异')).toBeInTheDocument();
+    expect(within(dialog).queryByText('局部差异')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('轻微差异')).not.toBeInTheDocument();
     expect(within(dialog).queryByText('明显偏离')).not.toBeInTheDocument();
     expect(within(dialog).queryByText('局部偏离')).not.toBeInTheDocument();
     expect(within(dialog).getByText('叙述距离')).toBeInTheDocument();

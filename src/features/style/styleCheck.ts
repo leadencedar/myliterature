@@ -43,10 +43,10 @@ export const StyleCheckSchema = z.object({
 export type StyleCheckResult = z.infer<typeof StyleCheckSchema>;
 
 export const STYLE_CHECK_SEVERITY_LABELS: Record<StyleCheckSeverity, string> = {
-  // 中性描述差异程度，不用「偏离/违反」这类判决口吻：判断权留给作者
+  // 统一成「程度」一个轴，去掉「局部/轻微」这类范围词，避免作者把范围和程度混着读
   high: '差异较大',
-  medium: '局部差异',
-  low: '轻微差异',
+  medium: '有所差异',
+  low: '略有差异',
 };
 
 // ---------------------------------------------------------------- 提示词
@@ -65,7 +65,7 @@ export const STYLE_CHECK_TASK = [
   '- 不要把情节好坏、题材选择、人物三观当成文风问题。',
   '- summary 用一两句说整体像不像作者本人的文字，不要复述问题清单。',
   '- basis：说明这句与本作品风格档案/文风锚点的可观察差异，例如句长、叙述距离、对话密度、意象密度、用词习惯；只谈写法，不评情节好坏。',
-  '- severity：high = 差异较大；medium = 局部差异；low = 轻微差异。',
+  '- severity：high = 差异较大；medium = 有所差异；low = 略有差异。',
 ].join('\n');
 
 /** 系统提示：开场白 + 风格档案（含作品信息），整本书稳定，可命中缓存 */

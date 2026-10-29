@@ -928,7 +928,10 @@ async function main() {
     // M4-01：整章生成「本次注入」清单应含「文风锚点 · 第 N 章开头」（M4 S1）
     const anchorEntry = page.getByText(/文风锚点 · 第 \d+ 章开头/u).first();
     await anchorEntry.waitFor({ state: 'attached', timeout: 10_000 });
-    await anchorEntry.scrollIntoViewIfNeeded();
+    // M4.1：清单下的「只用于对齐语感，不会复述其中情节」说明也应在含锚点时可见
+    const anchorHint = page.getByText('文风锚点只用于对齐语感，不会复述其中情节。');
+    await anchorHint.waitFor({ state: 'attached', timeout: 10_000 });
+    await anchorHint.scrollIntoViewIfNeeded();
     await page.waitForTimeout(200);
     log(
       'M4-1',

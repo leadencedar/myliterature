@@ -562,3 +562,31 @@ describe('超出目标的可见提示（M3.2）', () => {
     expect(screen.queryByText(/比目标多约/u)).not.toBeInTheDocument();
   });
 });
+
+describe('注入清单的文风锚点说明（M4.1）', () => {
+  it('注入含文风锚点时，清单下说明只对齐语感、不复述情节', async () => {
+    // beforeEach 已建第 1 章：给它补正文并标完成，作为锚点；再建第 2 章做目标
+    const [first] = await harness.repository.listChapters(context.novel.id);
+    const earlier = await harness.repository.updateChapter(first!.id, {
+      content: '雪落了整夜。'.repeat(70),
+      status: 'done',
+    });
+    const target = await harness.repository.createChapter(context.novel.id, {
+      title: '第2章 夜渡',
+    });
+
+    renderSheet({ chapters: [earlier, target], targetChapterId: target.id });
+
+    expect(await screen.findByText('本次注入')).toBeInTheDocument();
+    expect(screen.getByText('文风锚点 · 第 1 章开头')).toBeInTheDocument();
+    expect(screen.getByText('文风锚点只用于对齐语感，不会复述其中情节。')).toBeInTheDocument();
+  });
+
+  it('没有锚点时不显示锚点说明', async () => {
+    renderSheet();
+
+    expect(await screen.findByText('本次注入')).toBeInTheDocument();
+    expect(screen.queryByText(/文风锚点只用于对齐语感/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/文风锚点 · /u)).not.toBeInTheDocument();
+  });
+});

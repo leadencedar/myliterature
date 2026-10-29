@@ -129,8 +129,8 @@ describe('style-check schema', () => {
   it('severity 用中性差异标签，不用判决口吻', () => {
     expect(STYLE_CHECK_SEVERITY_LABELS).toEqual({
       high: '差异较大',
-      medium: '局部差异',
-      low: '轻微差异',
+      medium: '有所差异',
+      low: '略有差异',
     });
   });
 });
@@ -145,6 +145,8 @@ describe('style-check 提示词', () => {
     expect(system).toContain('不要把情节好坏、题材选择、人物三观当成文风问题');
     expect(system).toContain('basis');
     expect(system).toContain('句长、叙述距离、对话密度、意象密度');
+    expect(system).toContain('medium = 有所差异');
+    expect(system).toContain('low = 略有差异');
   });
 
   it('user 块顺序：文风锚点 → 本章正文 → 本次要求', () => {

@@ -8,7 +8,9 @@
  * 三条刻意的约束：
  * 1. **只取同一线、目标章之前**：主线不拿外传当锚点，外传也不拿主线；
  * 2. **优先已完成章**：完成章是作者认可的最终文本；草稿可能还会改；
- * 3. **只取开头**：开头进入得最稳、受情节影响最小；结尾常是钩子，句式反而特殊。
+ * 3. **已完成章里优先含对白的那一章**：文风漂移往往先在对话里露出来（语气词、称呼、句长），
+ *    纯叙述段更难判断是作者本人还是模型；
+ * 4. **只取开头**：开头进入得最稳、受情节影响最小；结尾常是钩子，句式反而特殊。
  *
  * 纯本地确定性选择，不调模型、不落库、不新增字段。
  */
@@ -18,6 +20,14 @@ import type { Chapter } from '@/domain/schema';
 export const STYLE_ANCHOR_CHARS = 600;
 /** 少于这个字数不足以代表语感（对话、单句场景会严重高估作者风格） */
 export const STYLE_ANCHOR_MIN_CHARS = 300;
+
+/** 对白标记：中文引号「」/“”、英文双引号。对白最能暴露语感漂移（语气词、称呼、句长） */
+export const STYLE_ANCHOR_DIALOGUE_PATTERN = /[「」“”"]/u;
+
+/** 给外部（如 styleCheck 面板/文档）复用的对白判断；只应作用在最终节选文本上 */
+export function containsDialogue(text: string): boolean {
+  return STYLE_ANCHOR_DIALOGUE_PATTERN.test(text);
+}
 
 export interface StyleAnchor {
   chapterId: string;
@@ -90,8 +100,17 @@ export function selectStyleAnchor(
   const firstCandidate = earlier[0];
   if (!firstCandidate) return null;
 
-  // 已完成章优先；都在改稿阶段时退而取最早有正文的一章
-  const chosen = earlier.find((chapter) => chapter.status === 'done') ?? firstCandidate;
+  // 已完成章优先；都在改稿阶段时退而取最早有正文的一章。
+  //
+  // 已完成章里再优先「开头节选含对白」的最早一章：长篇漂移常常先在对话里显出
+  // 语气词/称呼/句长的变化，纯叙述段反而难判断是不是作者本人的字。对白判断只对
+  // excerptFromStart 的结果做 —— 用整章检测会让「后段有对白」的章抢走锚点，
+  // 而锚点实际只注入开头 600 字。
+  const done = earlier.filter((chapter) => chapter.status === 'done');
+  const doneWithDialogue = done.find((chapter) =>
+    containsDialogue(excerptFromStart(chapter.content)),
+  );
+  const chosen = doneWithDialogue ?? done[0] ?? firstCandidate;
 
   return {
     chapterId: chosen.id,

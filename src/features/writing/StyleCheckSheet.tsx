@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { StyleAnchor } from '@/context/styleAnchor';
+import { countWords } from '@/domain/primitives';
 import type { Chapter, Novel, StyleProfile } from '@/domain/schema';
 import { useLlm } from '@/llm/useLlm';
 import { Button } from '@/ui/Button';
@@ -114,6 +115,12 @@ export function StyleCheckSheet({
           </p>
           <p className="text-xs leading-relaxed text-ink-500">
             只给诊断，最多 5 条，每条必须引用原文；不改稿、不生成提案。
+          </p>
+          <p className="text-xs leading-relaxed text-ink-500">
+            本章约 {countWords(chapter.content)} 字，检查一次调用。
+          </p>
+          <p className="text-xs leading-relaxed text-ink-500">
+            只对照风格档案与锚点，不逐个人物核对口吻。
           </p>
           {!hasContent ? (
             <p className="text-xs text-ink-500">本章还没有正文，写几段再来检查。</p>

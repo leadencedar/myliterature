@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { ChapterSchema, type Chapter } from '@/domain/schema';
-import { STYLE_ANCHOR_CHARS, STYLE_ANCHOR_MIN_CHARS, selectStyleAnchor } from './styleAnchor';
+import {
+  STYLE_ANCHOR_CHARS,
+  STYLE_ANCHOR_MIN_CHARS,
+  containsDialogue,
+  selectStyleAnchor,
+} from './styleAnchor';
 
 function chapter(index: number, overrides: Partial<Chapter> = {}): Chapter {
   return ChapterSchema.parse({
@@ -133,6 +138,96 @@ describe('文风锚点选择（纯函数）', () => {
     );
 
     expect(anchor).toBeNull();
+  });
+
+  it('已完成候选里优先开头含对白的最早一章，而不是最早已完成章', () => {
+    const anchor = selectStyleAnchor(
+      [
+        chapter(1, { content: text(400), status: 'done' }),
+        chapter(2, { content: `「你来了。」${text(350, '述')}`, status: 'done' }),
+        chapter(3),
+      ],
+      'ch3',
+    );
+
+    expect(anchor?.chapterId).toBe('ch2');
+    expect(anchor?.text.startsWith('「你来了。」')).toBe(true);
+  });
+
+  it('第一章开头就有对白时仍选第一章', () => {
+    const anchor = selectStyleAnchor(
+      [
+        chapter(1, { content: `“醒醒。”${text(350, '述')}`, status: 'done' }),
+        chapter(2, { content: `「后来。」${text(350, '述')}`, status: 'done' }),
+        chapter(3),
+      ],
+      'ch3',
+    );
+
+    expect(anchor?.chapterId).toBe('ch1');
+  });
+
+  it('英文双引号也算对白', () => {
+    const anchor = selectStyleAnchor(
+      [
+        chapter(1, { content: text(400), status: 'done' }),
+        chapter(2, { content: `"Wake up." ${text(350, '述')}`, status: 'done' }),
+        chapter(3),
+      ],
+      'ch3',
+    );
+
+    expect(anchor?.chapterId).toBe('ch2');
+  });
+
+  it('都无对白时回落最早已完成章', () => {
+    const anchor = selectStyleAnchor(
+      [
+        chapter(1, { content: text(400), status: 'done' }),
+        chapter(2, { content: text(400, '述'), status: 'done' }),
+        chapter(3),
+      ],
+      'ch3',
+    );
+
+    expect(anchor?.chapterId).toBe('ch1');
+  });
+
+  it('草稿章有对白但没有已完成章时，不按对白优先，仍取最早有正文的一章', () => {
+    const anchor = selectStyleAnchor(
+      [
+        chapter(1, { content: text(400), status: 'draft' }),
+        chapter(2, { content: `「喂。」${text(400, '述')}`, status: 'draft' }),
+        chapter(3),
+      ],
+      'ch3',
+    );
+
+    expect(anchor?.chapterId).toBe('ch1');
+  });
+
+  it('只在开头节选里检测对白：后段有对白的章不因此抢走锚点', () => {
+    // ch1 开头 600 字全是叙述（对白在 650 字之后），ch2 开头就有对白
+    const anchor = selectStyleAnchor(
+      [
+        chapter(1, {
+          content: `${text(650, '叙')}\n\n「这句在后段，不算。」${text(30, '述')}`,
+          status: 'done',
+        }),
+        chapter(2, { content: `「开头就有对白。」${text(350, '述')}`, status: 'done' }),
+        chapter(3),
+      ],
+      'ch3',
+    );
+
+    expect(anchor?.chapterId).toBe('ch2');
+  });
+
+  it('对白标记判断本身可独立复用', () => {
+    expect(containsDialogue('「喂。」')).toBe(true);
+    expect(containsDialogue('“醒醒。”')).toBe(true);
+    expect(containsDialogue('"Wake up."')).toBe(true);
+    expect(containsDialogue('只有叙述，没有引号。')).toBe(false);
   });
 
   it('确定性：同样输入两次选择结果一致', () => {

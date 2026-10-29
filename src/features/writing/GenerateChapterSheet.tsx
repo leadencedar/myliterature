@@ -365,6 +365,8 @@ export function GenerateChapterSheet({
     await commitAccept(mode);
   }
 
+  /** 本次注入里是否带了文风锚点：有的话清单下要说明「只对齐语感」 */
+  const hasStyleAnchor = preview.items.some((item) => item.included && item.kind === 'styleAnchor');
   const generatedText = phase.kind === 'streaming' || phase.kind === 'done' ? phase.text : '';
   const generatedWords = countWords(generatedText);
   /** 写完才算「够」：低于目标 85% 或截断/中断都要提示可以补写 */
@@ -413,6 +415,11 @@ export function GenerateChapterSheet({
                     </li>
                   ))}
               </ul>
+              {hasStyleAnchor ? (
+                <p className="text-xs leading-relaxed text-ink-300">
+                  文风锚点只用于对齐语感，不会复述其中情节。
+                </p>
+              ) : null}
               {droppedItems.length > 0 ? (
                 <p className="text-xs text-seal">
                   {droppedItems.length} 项因超出预算未注入：
