@@ -4,6 +4,18 @@ import tailwindcss from '@tailwindcss/vite';
 import { fileURLToPath, URL } from 'node:url';
 
 /**
+ * 部署路径前缀。
+ *
+ * 本地开发 / 局域网托管都是根路径 `/`；GitHub Pages 项目页则挂在
+ * `https://<user>.github.io/<repo>/` 下，构建时必须把资源前缀改成 `/repo/`，
+ * 否则线上的 JS / CSS / manifest 全部 404。
+ *
+ * 由环境变量传入（CI 里见 .github/workflows/deploy.yml），默认保持 `/`，
+ * 这样本机原有的 IndexedDB 数据源（localhost:5173）不受影响。
+ */
+const BASE = process.env.VITE_BASE ?? '/';
+
+/**
  * 允许直连的 LLM 接口白名单。
  *
  * 阶段一用户自带 API Key，密钥存在浏览器本地，因此用 CSP 把出站连接限制在
@@ -43,6 +55,7 @@ function contentSecurityPolicy(isDev: boolean): string {
 }
 
 export default defineConfig(({ command }) => ({
+  base: BASE,
   plugins: [
     react(),
     tailwindcss(),

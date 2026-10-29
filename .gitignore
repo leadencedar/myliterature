@@ -10,3 +10,6 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# 设计参考图 / 本地模型验收产物（体积大且含个人素材），不公开
+/analysis/
