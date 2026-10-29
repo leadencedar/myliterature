@@ -79,6 +79,27 @@ const ARCHIVE_RESULT = {
   rollingSummary: '沈砚登船北上；旧簪与青冥宗两条线索浮出水面。',
 };
 
+/** M4 文风检查的假输出（用于 device-check 的「检查文风」面板） */
+const STYLE_CHECK_RESULT = {
+  summary: '整体语感稳定，但有一处叙述距离被拉远。',
+  issues: [
+    {
+      dimension: '叙述距离',
+      severity: 'high',
+      excerpt: '江雾漫上来，他把手缩回袖中。',
+      basis: '这句从现场动作切到总结，叙述距离比第 1 章开头更远。',
+      suggestion: '把回忆压回动作后面，别直接解释。',
+    },
+    {
+      dimension: '句式',
+      severity: 'medium',
+      excerpt: '船到河心，风更急了。',
+      basis: '连续短句比锚点的长句更碎，节奏偏快。',
+      suggestion: '短句连用可以合并一处。',
+    },
+  ],
+};
+
 function corsHeaders() {
   return {
     'access-control-allow-origin': BASE,
@@ -113,6 +134,11 @@ async function installModelMock(page, mockLog) {
         body: JSON.stringify({ error: { message: 'device-check 未预期流式请求' } }),
       });
     }
+    const messages = Array.isArray(body.messages) ? body.messages : [];
+    const lastUserText = messages.filter((message) => message.role === 'user').pop()?.content ?? '';
+    const payload = String(lastUserText).includes('只输出结构化诊断')
+      ? STYLE_CHECK_RESULT
+      : ARCHIVE_RESULT;
     return route.fulfill({
       status: 200,
       headers: corsHeaders(),
@@ -124,7 +150,7 @@ async function installModelMock(page, mockLog) {
         choices: [
           {
             index: 0,
-            message: { role: 'assistant', content: JSON.stringify(ARCHIVE_RESULT) },
+            message: { role: 'assistant', content: JSON.stringify(payload) },
             finish_reason: 'stop',
           },
         ],
@@ -319,10 +345,16 @@ async function seedData(page) {
       parentId: volume.id,
       targetWords: 3000,
     });
-    const chapter = await repo.createChapter(novel.id, {
-      title: '夜渡',
-      content: '渡口的风比记忆里更冷。沈砚把衣领竖起来，站在石阶最上面。',
+    // M4：第 1 章已完成且开头含对白（文风锚点），第 2 章是当前章（生成面板/检查文风/归档）
+    const sourceChapter = await repo.createChapter(novel.id, {
+      title: '源头章',
+      content: `「官凭。」\n\n${'江雾'.repeat(200)}`,
       outlineNodeId: chapterNode.id,
+    });
+    await repo.updateChapter(sourceChapter.id, { status: 'done' });
+    const chapter = await repo.createChapter(novel.id, {
+      title: '目标章',
+      content: '本章正文。',
     });
 
     // 导入旧稿《旧稿十章》：10 章、无大纲，用于回溯预览
@@ -452,9 +484,26 @@ async function runMainFlow({ device, context, checks, errors, mockLog, screensho
   await continueDialog.getByRole('button', { name: '关闭' }).click();
   await continueDialog.waitFor({ state: 'hidden', timeout: 10_000 });
 
-  // 4) 章节归档 → 归档收件箱 → M2.1 安全提示
-  await page.getByRole('button', { name: '继续写第 1 章' }).click();
+  // 4) M4：章节编辑器 → 生成面板（锚点说明）→ 归档收件箱 → 检查文风
+  await page.getByRole('button', { name: '继续写第 2 章' }).click();
   await page.getByLabel('章节正文').waitFor({ state: 'visible', timeout: 10_000 });
+  await page.getByRole('button', { name: '生成本章' }).click();
+  const generateDialog = page.getByRole('dialog', { name: '生成本章正文' });
+  await generateDialog.waitFor({ state: 'visible', timeout: 10_000 });
+  await waitText(page, '本次注入');
+  await waitText(page, '文风锚点只用于对齐语感，不会复述其中情节。', 15_000);
+  await checkPage({
+    page,
+    device,
+    pageName: '生成面板（M4 锚点说明）',
+    url: '章节编辑器（生成本章正文）',
+    checks,
+    buttonNames: ['开始生成'],
+  });
+  await generateDialog.getByRole('button', { name: '关闭' }).click();
+  await generateDialog.waitFor({ state: 'hidden', timeout: 10_000 });
+
+  // 章节归档（第 2 章仍为草稿，标记完成触发归档）
   await page.getByRole('button', { name: '草稿' }).click();
   await waitText(page, '本章摘要与设定已生成', 25_000);
   await page.getByRole('button', { name: '查看' }).click();
@@ -476,6 +525,42 @@ async function runMainFlow({ device, context, checks, errors, mockLog, screensho
   }
   await archiveDialog.getByRole('button', { name: '关闭' }).click();
   await archiveDialog.waitFor({ state: 'hidden', timeout: 10_000 });
+
+  // 4.5) M4：检查文风（入口/面板 idle/结果；只诊断、无改写按钮）
+  await checkPage({
+    page,
+    device,
+    pageName: '章节编辑器（M4 检查文风入口）',
+    url: '章节编辑器',
+    checks,
+    buttonNames: ['检查文风'],
+  });
+  await page.getByRole('button', { name: '检查文风' }).click();
+  const styleDialog = page.getByRole('dialog', { name: '检查文风' });
+  await styleDialog.waitFor({ state: 'visible', timeout: 10_000 });
+  await checkPage({
+    page,
+    device,
+    pageName: '检查文风面板（idle）',
+    url: '章节编辑器（检查文风）',
+    checks,
+    buttonNames: ['检查文风'],
+  });
+  await styleDialog.getByRole('button', { name: '检查文风' }).click();
+  await waitText(page, '对照锚点：', 20_000);
+  await checkPage({
+    page,
+    device,
+    pageName: '检查文风结果',
+    url: '章节编辑器（检查文风结果）',
+    checks,
+    buttonNames: ['完成'],
+  });
+  if (screenshots?.stylecheck) {
+    await shot(page, screenshots.stylecheck, `${device}：检查文风结果（M4）`);
+  }
+  await styleDialog.getByRole('button', { name: '完成' }).click();
+  await styleDialog.waitFor({ state: 'hidden', timeout: 10_000 });
 
   // 5) 刷新后持久化：IndexedDB 种子仍在 + localStorage 设置仍在
   await page.reload({ waitUntil: 'load' });
@@ -663,6 +748,7 @@ async function main() {
     writing: 'device-mobile-writing.png',
     backfill: 'device-mobile-backfill.png',
     archive: 'device-mobile-archive.png',
+    stylecheck: 'device-mobile-stylecheck.png',
     desktopWriting: 'device-desktop-writing.png',
   };
   let server;
@@ -727,6 +813,7 @@ async function main() {
         writing: screenshots.writing,
         backfill: screenshots.backfill,
         archive: screenshots.archive,
+        stylecheck: screenshots.stylecheck,
       },
     });
     await mobileContext.close();
