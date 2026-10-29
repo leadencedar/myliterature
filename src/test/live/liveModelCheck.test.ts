@@ -6,8 +6,8 @@
  *
  * 目的不是断言「文笔好」，而是回答上线前必须知道的三件事：
  * 1. 生产 prompt + schema 在真实模型上能否稳定吐回合法结构；
- * 2. 归档提取、前沿大纲、整章生成的实际耗时与 token 成本；
- * 3. 质量指标（条目数/龙套命名/章数/场景数/伏笔收束/字数）落在什么量级，供人工判断。
+ * 2. 归档提取、前沿大纲、整章生成、文风检查的实际耗时与 token 成本；
+ * 3. 质量指标（条目数/龙套命名/章数/场景数/伏笔收束/字数/诊断证据）落在什么量级，供人工判断。
  *
  * 硬断言只保 schema 合法、关键内容非空、调用成功；质量项以结构化 console.log 输出，
  * 并写入 `analysis/live-model-report.json`，由人工审阅 —— 文风与节奏不适合用机器阈值卡。
@@ -19,8 +19,10 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SummaryChainContextBuilder } from '@/context/SummaryChainContextBuilder';
+import { selectStyleAnchor } from '@/context/styleAnchor';
 import { selectPlanningEntries } from '@/context/planningContext';
 import { countWords } from '@/domain/primitives';
+import { chaptersOfTrack } from '@/domain/sideStory';
 import type {
   Category,
   Chapter,
@@ -44,6 +46,12 @@ import {
   composeFrontierSynopsis,
   type RecentChapterPoint,
 } from '@/features/outline/outlineContinue';
+import {
+  STYLE_CHECK_SEVERITY_LABELS,
+  StyleCheckSchema,
+  buildStyleCheckSystemPrompt,
+  buildStyleCheckUserPrompt,
+} from '@/features/style/styleCheck';
 import { ARCHIVE_EXTRACT_EXTRA_REQUIREMENT } from '@/features/writing/archiveChapter';
 import { buildChapterSystemPrompt, buildChapterUserPrompt } from '@/features/writing/chapterDraft';
 import { chapterMaxOutputTokens } from '@/features/writing/chapterLength';
@@ -143,6 +151,10 @@ function preview(text: string, limit = 400): string {
   return trimmed.length <= limit ? trimmed : `${trimmed.slice(0, limit)}…`;
 }
 
+function normalizeForExcerpt(text: string): string {
+  return text.replace(/\s+/gu, '').replace(/[.…]+/gu, '');
+}
+
 async function runCheck(
   name: string,
   fn: () => Promise<{ metrics: Record<string, unknown>; usage?: TokenUsage; sample?: string }>,
@@ -196,7 +208,7 @@ interface LiveFixtures {
 }
 
 const CHAPTER_CONTENT: Record<number, string> = {
-  1: `渡口的雾还没散，林越在潮湿的木板上醒来。他记不清自己是谁，只记得火光和一声很长的惨叫。裴照蹲在他面前，把一把没有刀鞘的短刀递过来：「拿着。你昨夜握了一整夜。」林越接过刀，指尖发凉。刀柄上刻着一个他不认识的字，像是被谁用指甲一点点划出来的。远处传来马蹄声，裴照起身，把斗篷盖到他肩上。`,
+  1: `渡口的雾还没散，林越在潮湿的木板上醒来。他记不清自己是谁，只记得火光和一声很长的惨叫。裴照蹲在他面前，把一把没有刀鞘的短刀递过来：「拿着。你昨夜握了一整夜。」林越接过刀，指尖发凉。刀柄上刻着一个他不认识的字，像是被谁用指甲一点点划出来的。远处传来马蹄声，裴照起身，把斗篷盖到他肩上。\n\n第七天夜里下起雪，两个人在废弃的驿站歇脚。裴照把仅剩的干粮分了一半给林越，自己靠在门边擦刀。林越问他为什么肯带自己去青冥宗，裴照没有立刻回答。火堆噼啪响了一声，他才说：「我师父死在那场火里，账总得有人来结。」\n\n林越低头看着自己的手。这双手他一点也不熟悉，虎口却有厚茧，像握了十几年剑。他忽然明白，自己忘掉的也许不只是名字，还有一些不愿意想起来的事。\n\n雪越下越大，驿站的窗纸被风吹得发抖。裴照把地图压在膝上，指了指第三个山口：「过了那里，就没有回头路了。」林越点点头，却发现自己并不想回头。`,
   2: `北上的路走了七天。驿站的人都说青冥宗是十几年前就烧空了的废观，没人愿意带路。裴照不说话，只在晚上把地图摊在桌上，用炭笔圈出第三个山口。林越盯着地图上那个墨点，忽然想起一个词——雪夜。他不知道这个词从哪来，但说出口时，裴照的炭笔停了一瞬。那一刻两个人都清楚：他们找到的方向，也许正是当年那场大火的起点。`,
   3: ARCHIVE_CHAPTER_CONTENT,
 };
@@ -315,7 +327,7 @@ async function seedFixtures(harness: TestHarness): Promise<LiveFixtures> {
 
 // ---------------------------------------------------------------- 抽检
 
-describeLive('真实模型抽检（3 次调用）', () => {
+describeLive('真实模型抽检（4 次调用）', () => {
   let harness: TestHarness;
   let fixtures: LiveFixtures;
 
@@ -570,6 +582,105 @@ describeLive('真实模型抽检（3 次调用）', () => {
       };
     });
   }, 240_000);
+
+  it('D 文风检查：一次 style-check 诊断第 3 章（含第 1 章锚点）', async () => {
+    await runCheck('style-check', async () => {
+      const targetChapter = fixtures.targetChapter;
+      const sameTrack = chaptersOfTrack(fixtures.chapters, targetChapter.sideStoryId ?? null);
+      const anchor = selectStyleAnchor(sameTrack, targetChapter.id, '第');
+      if (!anchor) throw new Error('夹具异常：第 3 章之前应有可用的文风锚点');
+
+      const system = buildStyleCheckSystemPrompt(fixtures.novel, fixtures.style);
+      const user = buildStyleCheckUserPrompt({ anchor, content: targetChapter.content });
+      const profile = TASK_PROFILES['style-check'];
+
+      const result = await generateStructured({
+        client: liveClient(),
+        model: STRONG_MODEL,
+        schema: StyleCheckSchema,
+        schemaName: 'StyleCheck',
+        system,
+        user,
+        temperature: profile.temperature,
+        thinking: profile.thinking,
+        ...(profile.reasoningEffort ? { reasoningEffort: profile.reasoningEffort } : {}),
+        failOnTruncation: true,
+      });
+      const data = result.data;
+      // 硬断言：schema 已校验；这里再保整体判断非空
+      expect(data.summary.trim().length).toBeGreaterThan(0);
+
+      const chapterText = targetChapter.content;
+      const normalizedChapter = normalizeForExcerpt(chapterText);
+      const issues = data.issues.map((issue) => {
+        const excerpt = issue.excerpt.trim();
+        const normalizedExcerpt = normalizeForExcerpt(excerpt);
+        return {
+          dimension: issue.dimension,
+          severity: issue.severity,
+          severityLabel: STYLE_CHECK_SEVERITY_LABELS[issue.severity],
+          excerpt: preview(excerpt, 120),
+          // 主指标：原文证据是否逐字出现在本章正文里（精确子串）
+          excerptVerbatim: excerpt.length > 0 && chapterText.includes(excerpt),
+          // 辅助指标：忽略空白与省略号后是否仍能对上（方便人工判断是排版差异还是编造）
+          excerptNormalized:
+            normalizedExcerpt.length > 0 && normalizedChapter.includes(normalizedExcerpt),
+          basis: preview(issue.basis, 120),
+          basisNonEmpty: issue.basis.trim().length > 0,
+          suggestion: preview(issue.suggestion, 120),
+          suggestionNonEmpty: issue.suggestion.trim().length > 0,
+        };
+      });
+
+      const severityCounts = { low: 0, medium: 0, high: 0 };
+      for (const issue of data.issues) severityCounts[issue.severity] += 1;
+      const verbatimCount = issues.filter((issue) => issue.excerptVerbatim).length;
+      // 全部 excerpt 都找不到 = 模型可能在编原文证据：这是质量问题，标成严重但不硬失败
+      const allExcerptsMissed = issues.length > 0 && verbatimCount === 0;
+      if (allExcerptsMissed) {
+        console.warn('[live] style-check：所有 excerpt 都不在本章正文中，可能编造了原文证据');
+      }
+
+      const usage = result.usage;
+      const promptTokens = usage?.promptTokens ?? 0;
+      const cachedPromptTokens = usage?.cachedPromptTokens ?? 0;
+
+      return {
+        metrics: {
+          targetChapterIndex: targetChapter.index,
+          anchorLabel: anchor.label,
+          anchorChars: anchor.text.length,
+          chapterChars: chapterText.length,
+          summary: data.summary,
+          issueCount: data.issues.length,
+          issues,
+          issueDimensions: data.issues.map((issue) => issue.dimension),
+          severityCounts,
+          excerptsVerbatim: verbatimCount,
+          excerptsNormalized: issues.filter((issue) => issue.excerptNormalized).length,
+          // 全部证据都不在正文 → 标严重问题（人工复核模型是否编造证据）
+          allExcerptsMissed,
+          severeWarning: allExcerptsMissed
+            ? '所有 excerpt 都不在本章正文中（可能编造原文证据）'
+            : null,
+          basisAllNonEmpty: issues.every((issue) => issue.basisNonEmpty),
+          suggestionAllNonEmpty: issues.every((issue) => issue.suggestionNonEmpty),
+          promptTokens,
+          completionTokens: usage?.completionTokens ?? 0,
+          cachedPromptTokens,
+          cacheHitRatio:
+            promptTokens > 0 ? Number((cachedPromptTokens / promptTokens).toFixed(3)) : null,
+          attempts: result.attempts,
+        },
+        usage,
+        sample: preview(
+          `${data.summary}\n${issues
+            .map((issue) => `[${issue.severityLabel}] ${issue.dimension}：${issue.excerpt}`)
+            .join('\n')}`,
+        ),
+      };
+    });
+  }, 180_000);
 });
 
 // 没有 Key 时也给出一条可见的提示，避免「为什么全 skip」找错方向

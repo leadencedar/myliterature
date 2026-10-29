@@ -123,6 +123,27 @@ const FRONTIER_RESULT = {
   })),
 };
 
+/** style-check（M4 文风漂移检查）的假输出：2 条问题，含 severity/维度/原文/建议 */
+const STYLE_CHECK_RESULT = {
+  summary: '整体语感稳定，但有一处叙述距离被拉远。',
+  issues: [
+    {
+      dimension: '叙述距离',
+      severity: 'high',
+      excerpt: '他听见自己的心跳，比河声还响。',
+      basis: '这句从现场动作切到总结性心理，叙述距离比第 1 章开头拉远了。',
+      suggestion: '把回忆压到动作后面，别直接解释。',
+    },
+    {
+      dimension: '句式',
+      severity: 'medium',
+      excerpt: '船到河心，风更急了。',
+      basis: '连续短句比第 1 章开头的长句更碎，节奏偏快。',
+      suggestion: '短句连用可以合并一处。',
+    },
+  ],
+};
+
 /** 继续补写（S4）的假追加正文：约 2600 字，让目标 3000 字的章节补到 85% 以上 */
 const CONTINUE_TEXT = '船到河心，风更急了，沈砚压着斗笠没有说话。'.repeat(100);
 
@@ -208,7 +229,7 @@ async function installModelMock(page, mockLog) {
       'mock',
       stream
         ? '流式请求（chapter-draft / 继续补写）'
-        : '结构化请求（outline-expand / extract-settings / outline-continue）',
+        : '结构化请求（outline-expand / extract-settings / outline-continue / style-check）',
       `model=${body.model ?? '?'} max_tokens=${body.max_tokens ?? '无'} response_format=${body.response_format?.type ?? '无'} messages=${JSON.stringify(
         (body.messages ?? []).map(
           (message) => `${message.role}:${String(message.content ?? '').length}字`,
@@ -236,10 +257,18 @@ async function installModelMock(page, mockLog) {
     // outline-expand 的 user 里也有【本次要求】（拆成 N 个子节点），必须再按措辞区分：
     // 续写 = 「续写 N 章。」；细化 = 「拆成 N 个子节点」
     const isContinue = /续写 \d+ 章。/u.test(String(lastUserText));
+    // M4 文风检查的 user 里也有【本次要求】，用诊断专用措辞区分
+    const isStyleCheck = String(lastUserText).includes('只输出结构化诊断');
     const isExpand =
       String(lastUserText).includes('要拆分的节点') ||
       /拆成 \d+ 个子节点/u.test(String(lastUserText));
-    const payload = isContinue ? FRONTIER_RESULT : isExpand ? EXPAND_RESULT : EXTRACT_RESULT;
+    const payload = isStyleCheck
+      ? STYLE_CHECK_RESULT
+      : isContinue
+        ? FRONTIER_RESULT
+        : isExpand
+          ? EXPAND_RESULT
+          : EXTRACT_RESULT;
     return route.fulfill({
       status: 200,
       headers: { ...corsHeaders(), 'content-type': 'application/json; charset=utf-8' },
@@ -895,6 +924,24 @@ async function main() {
     // 10d) S4：短稿差额提示 → 继续补写 → 追加后提示消失
     await page.getByRole('button', { name: '生成本章' }).click();
     await waitText(page, '本次注入');
+
+    // M4-01：整章生成「本次注入」清单应含「文风锚点 · 第 N 章开头」（M4 S1）
+    const anchorEntry = page.getByText(/文风锚点 · 第 \d+ 章开头/u).first();
+    await anchorEntry.waitFor({ state: 'attached', timeout: 10_000 });
+    await anchorEntry.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(200);
+    log(
+      'M4-1',
+      '整章生成「本次注入」含文风锚点',
+      await visibleText(page.getByRole('dialog', { name: '生成本章正文' }), 800),
+    );
+    await shot(
+      page,
+      'M4-1',
+      'm4-01-anchor-injection-mobile.png',
+      'M4：整章生成「本次注入」含「文风锚点 · 第 N 章开头」',
+    );
+
     const startThird = page.getByRole('button', { name: '开始生成' });
     await startThird.scrollIntoViewIfNeeded();
     await startThird.click({ timeout: 20_000 });
@@ -922,6 +969,25 @@ async function main() {
       'm2-09-continue-result-mobile.png',
       'M2-S4：补写已追加；达到目标后提示消失',
     );
+
+    // M4-02：检查文风（只诊断、引用原文、无改写按钮）
+    const generateDialog = page.getByRole('dialog', { name: '生成本章正文' });
+    await generateDialog.getByRole('button', { name: '关闭' }).click();
+    await generateDialog.waitFor({ state: 'hidden', timeout: 10_000 });
+    await page.getByRole('button', { name: '检查文风' }).click();
+    const styleDialog = page.getByRole('dialog', { name: '检查文风' });
+    await styleDialog.waitFor({ state: 'visible', timeout: 10_000 });
+    await styleDialog.getByRole('button', { name: '检查文风' }).click();
+    await waitText(page, '对照锚点：', 20_000);
+    log('M4-2', '检查文风结果', await visibleText(styleDialog, 900));
+    await shot(
+      page,
+      'M4-2',
+      'm4-02-style-check-mobile.png',
+      'M4：检查文风结果（severity/维度/原文/建议；无改写按钮）',
+    );
+    await styleDialog.getByRole('button', { name: '完成' }).click();
+    await styleDialog.waitFor({ state: 'hidden', timeout: 10_000 });
 
     // ================================================================
     // M3：导入旧稿 1:1 回溯大纲 → 前沿续写 3 章（task-49 沙盒）
@@ -1037,7 +1103,7 @@ async function main() {
     log(
       '30',
       '走查完成',
-      `after 截图 11 张 + M2 截图 9 张 + M2.1 截图 3 张 + M3 截图 5 张 + M3.2 截图 1 张；mock 请求 ${mockLog.length} 次（stream: ${mockLog.filter((item) => item.stream).length}）；页面异常 ${pageErrors.length} 个`,
+      `after 截图 11 张 + M2 截图 9 张 + M2.1 截图 3 张 + M3 截图 5 张 + M3.2 截图 1 张 + M4 截图 2 张；mock 请求 ${mockLog.length} 次（stream: ${mockLog.filter((item) => item.stream).length}）；页面异常 ${pageErrors.length} 个`,
     );
 
     writeFileSync(

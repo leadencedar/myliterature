@@ -27,6 +27,7 @@ const TASK_ORDER: TaskKind[] = [
   'chapter-summary',
   'extract-settings',
   'translate-chapter',
+  'style-check',
 ];
 
 export function SettingsPage() {

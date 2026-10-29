@@ -1137,3 +1137,119 @@ describe('推演章节（scenarioContext，设计 D7.3 + design-addendum 第 2 �
     expect(built.defaultEntryIds).toEqual([pei.id]);
   });
 });
+
+describe('文风锚点（M4 S1）', () => {
+  const writingNorm = WritingNormSchema.parse({
+    id: 'norm-anchor',
+    novelId: 'n1',
+    title: '使用提示',
+    content: '- 不要写招式名。【标记 ANCHOR】',
+    createdAt: 0,
+    updatedAt: 0,
+  });
+
+  /** 400 字、已完成的一章：足够成为锚点 */
+  const anchorChapter = () =>
+    chapter(1, {
+      id: 'ch1',
+      content: `第一个早晨。\n\n${'江雾'.repeat(200)}`,
+      status: 'done',
+    });
+
+  it('有更早已完成正文时注入锚点：风格之后、规范之前，独立 item 可见', () => {
+    const built = builder.build(
+      request({
+        writingNorms: [writingNorm],
+        chapters: [anchorChapter(), chapter(2)],
+        targetChapterId: 'ch2',
+      }),
+    );
+
+    expect(built.stablePrefix).toContain('【文风锚点 · 第 1 章开头（作者本人原文）】');
+    expect(built.stablePrefix).toContain('只用来对齐句式、节奏与叙述距离');
+    const anchorAt = built.stablePrefix.indexOf('【文风锚点');
+    const styleAt = built.stablePrefix.indexOf('【文体取向】');
+    const normAt = built.stablePrefix.indexOf('【作者的写作规范】');
+    expect(anchorAt).toBeGreaterThan(styleAt);
+    expect(anchorAt).toBeLessThan(normAt);
+
+    const anchorItem = built.items.find((item) => item.kind === 'styleAnchor');
+    expect(anchorItem).toMatchObject({
+      id: 'ch1',
+      label: '文风锚点 · 第 1 章开头',
+      included: true,
+    });
+    expect(anchorItem!.tokens).toBeGreaterThan(0);
+    // 清单顺序与 prompt 一致：meta → styleAnchor → norm
+    const kinds = built.items.map((item) => item.kind);
+    expect(kinds.indexOf('styleAnchor')).toBeGreaterThan(kinds.indexOf('meta'));
+    expect(kinds.indexOf('styleAnchor')).toBeLessThan(kinds.indexOf('norm'));
+  });
+
+  it('预算不足时锚点进 dropped：文本不进前缀、清单可见原因', () => {
+    const built = builder.build(
+      request({
+        writingNorms: [writingNorm],
+        chapters: [anchorChapter(), chapter(2)],
+        targetChapterId: 'ch2',
+        budget: 1,
+      }),
+    );
+
+    expect(built.stablePrefix).not.toContain('【文风锚点');
+    expect(built.items.find((item) => item.kind === 'styleAnchor')).toMatchObject({
+      included: false,
+      droppedReason: '超出 token 预算',
+    });
+  });
+
+  it('第一章 / 只有更晚正文时不产生锚点项，稳定前缀逐字节不变', () => {
+    const only = builder.build(
+      request({
+        chapters: [chapter(1, { content: '首章正文。'.repeat(80) })],
+        targetChapterId: 'ch1',
+      }),
+    );
+    const withLater = builder.build(
+      request({
+        chapters: [
+          chapter(1, { content: '首章正文。'.repeat(80) }),
+          chapter(2, { content: '后续正文。'.repeat(80) }),
+        ],
+        targetChapterId: 'ch1',
+      }),
+    );
+
+    expect(only.items.some((item) => item.kind === 'styleAnchor')).toBe(false);
+    expect(only.stablePrefix).not.toContain('【文风锚点');
+    expect(withLater.stablePrefix).toBe(only.stablePrefix);
+  });
+
+  it('外传章节的锚点标签带「外传第」，且只取同一线', () => {
+    const side = SideStorySchema.parse({
+      id: 'side-a',
+      novelId: 'n1',
+      title: '青冥旧事',
+      createdAt: 0,
+      updatedAt: 0,
+    });
+    const built = builder.build(
+      request({
+        sideStories: [side],
+        chapters: [
+          chapter(1, { content: '主线正文。'.repeat(100), status: 'done' }),
+          chapter(1, {
+            id: 'side-ch1',
+            sideStoryId: 'side-a',
+            content: '外传正文。'.repeat(100),
+            status: 'done',
+          }),
+          chapter(2, { id: 'side-ch2', sideStoryId: 'side-a' }),
+        ],
+        targetChapterId: 'side-ch2',
+      }),
+    );
+
+    expect(built.stablePrefix).toContain('【文风锚点 · 外传第 1 章开头（作者本人原文）】');
+  });
+});

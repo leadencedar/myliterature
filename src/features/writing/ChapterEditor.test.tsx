@@ -1210,7 +1210,7 @@ describe('标记完成后的后台归档（S3）', () => {
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
     // 安全提示动态化：本批共 3 项，其中 1 条合并默认不选，当前跳过 1 条 → 将写入 2 项
     expect(
-      within(dialog).getByText(
+      await within(dialog).findByText(
         /本批共 3 项，其中 1 条对已有条目的合并\/替换默认不选；当前还有 1 条跳过（底部「采用本批」只计入将写入的 2 项）/u,
       ),
     ).toBeInTheDocument();
@@ -1252,7 +1252,7 @@ describe('标记完成后的后台归档（S3）', () => {
 
     // 全部纳入后安全提示与底部计数同步
     expect(
-      within(dialog).getByText(
+      await within(dialog).findByText(
         /本批共 3 项，其中 1 条对已有条目的合并\/替换已全部纳入（将写入 3 项）/u,
       ),
     ).toBeInTheDocument();
@@ -1314,7 +1314,7 @@ describe('标记完成后的后台归档（S3）', () => {
     await user.click(screen.getByRole('button', { name: '查看' }));
     const dialog = await screen.findByRole('dialog', { name: '本章摘要与设定待确认' });
     expect(
-      within(dialog).getByText(
+      await within(dialog).findByText(
         /本批共 4 项，其中 2 条对已有条目的合并\/替换默认不选；当前还有 2 条跳过（底部「采用本批」只计入将写入的 2 项）/u,
       ),
     ).toBeInTheDocument();
@@ -1323,14 +1323,14 @@ describe('标记完成后的后台归档（S3）', () => {
     // 纳入一条：跳过数减一，将写入加一
     await user.click(within(dialog).getAllByRole('button', { name: '纳入本批' })[0]!);
     expect(
-      within(dialog).getByText(/当前还有 1 条跳过（底部「采用本批」只计入将写入的 3 项）/u),
+      await within(dialog).findByText(/当前还有 1 条跳过（底部「采用本批」只计入将写入的 3 项）/u),
     ).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: '采用本批（3）' })).toBeInTheDocument();
 
     // 全部纳入
     await user.click(within(dialog).getByRole('button', { name: '纳入本批' }));
     expect(
-      within(dialog).getByText(
+      await within(dialog).findByText(
         /本批共 4 项，其中 2 条对已有条目的合并\/替换已全部纳入（将写入 4 项）/u,
       ),
     ).toBeInTheDocument();
@@ -1501,5 +1501,161 @@ describe('标记完成后的后台归档（S3）', () => {
 
     resolveFetch(jsonResponse(completion(JSON.stringify(ARCHIVE_RESULT))));
     expect(await screen.findByText(/本章摘要与设定已生成/)).toBeInTheDocument();
+  });
+});
+
+describe('检查文风（M4 S2）', () => {
+  const STYLE_CHECK_RESULT = {
+    summary: '整体仍是作者本人的语感，只有一处对话偏解释。',
+    issues: [
+      {
+        dimension: '叙述距离',
+        severity: 'high',
+        excerpt: '他心中想到，这大概就是命运。',
+        basis: '锚点是外部动作叙述，这里改成第三人称心理直述，距离突然拉近。',
+        suggestion: '删掉解释，让动作承担信息。',
+      },
+      {
+        dimension: '句式',
+        severity: 'low',
+        excerpt: '雪落了整夜。',
+        basis: '与锚点一致的短句，没有明显差异。',
+        suggestion: '保持短句。',
+      },
+    ],
+  };
+
+  function stubStyleCheck(result: unknown = STYLE_CHECK_RESULT) {
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+        return Promise.resolve(jsonResponse(completion(JSON.stringify(result))));
+      }),
+    );
+    return bodies;
+  }
+
+  async function openStyleCheck(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole('button', { name: '检查文风' }));
+    return screen.findByRole('dialog', { name: '检查文风' });
+  }
+
+  it('没有正文时入口禁用', async () => {
+    await enterEditor();
+    expect(screen.getByRole('button', { name: '检查文风' })).toBeDisabled();
+  });
+
+  it('一次调用：请求含风格与正文；结果含 severity/维度/引用/建议；无改写按钮', async () => {
+    const user = await enterEditor();
+    const content = '雪落了整夜，他心中想到，这大概就是命运。';
+    await user.type(screen.getByLabelText('章节正文'), content);
+    await waitFor(() => expect(screen.getByText('已保存')).toBeInTheDocument(), { timeout: 3000 });
+    const bodies = stubStyleCheck();
+
+    const dialog = await openStyleCheck(user);
+    // 打开面板不发请求：只有点面板里的「检查文风」才调模型
+    expect(bodies).toHaveLength(0);
+    await user.click(within(dialog).getByRole('button', { name: '检查文风' }));
+
+    expect(await within(dialog).findByText(STYLE_CHECK_RESULT.summary)).toBeInTheDocument();
+    // 中性 severity 标签：不再像判决
+    expect(within(dialog).getByText('差异较大')).toBeInTheDocument();
+    expect(within(dialog).queryByText(/明显偏离|局部偏离/u)).not.toBeInTheDocument();
+    expect(within(dialog).getByText('叙述距离')).toBeInTheDocument();
+    // 每条同时显示原文与「差在哪」的依据
+    expect(within(dialog).getAllByText(/原文：/u)).toHaveLength(2);
+    expect(within(dialog).getByText(/「他心中想到，这大概就是命运。」/u)).toBeInTheDocument();
+    expect(within(dialog).getAllByText('依据：')).toHaveLength(2);
+    expect(
+      within(dialog).getByText(/锚点是外部动作叙述，这里改成第三人称心理直述/u),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/建议：删掉解释/u)).toBeInTheDocument();
+    // 与「按规范检查」的分工一句
+    expect(
+      within(dialog).getByText(
+        /文风检查看语感与叙述距离是否漂移；按规范检查看你定的规矩是否被违反。依据：风格档案 \+ 文风锚点。/u,
+      ),
+    ).toBeInTheDocument();
+    // 第一章没有更早正文：本次没有文风锚点
+    expect(within(dialog).getByText(/本次没有文风锚点/u)).toBeInTheDocument();
+
+    expect(bodies).toHaveLength(1);
+    const messages = (bodies[0] as { messages: { role: string; content: string }[] }).messages;
+    const system = messages.find((message) => message.role === 'system')!.content;
+    const userMessage = messages.find((message) => message.role === 'user')!.content;
+    expect(system).toContain('归墟纪');
+    expect(system).toContain('只诊断，不改稿');
+    expect(userMessage).toContain('【本章正文】');
+    expect(userMessage).toContain('这大概就是命运');
+    expect(userMessage).not.toContain('文风锚点');
+
+    // 只读诊断：不提供任何应用建议/自动改写入口
+    expect(
+      within(dialog).queryByRole('button', { name: /应用|改写|替换|润色|采用建议/u }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('没有问题时明确显示「未发现明显文风漂移」', async () => {
+    const user = await enterEditor();
+    await user.type(screen.getByLabelText('章节正文'), '雪落了整夜。');
+    await waitFor(() => expect(screen.getByText('已保存')).toBeInTheDocument(), { timeout: 3000 });
+    stubStyleCheck({ summary: '整体稳定，像作者本人。', issues: [] });
+
+    const dialog = await openStyleCheck(user);
+    await user.click(within(dialog).getByRole('button', { name: '检查文风' }));
+
+    expect(await within(dialog).findByText('未发现明显文风漂移。')).toBeInTheDocument();
+    expect(within(dialog).getByText('整体稳定，像作者本人。')).toBeInTheDocument();
+  });
+
+  it('失败显示错误并可重试', async () => {
+    const user = await enterEditor();
+    await user.type(screen.getByLabelText('章节正文'), '雪落了整夜。');
+    await waitFor(() => expect(screen.getByText('已保存')).toBeInTheDocument(), { timeout: 3000 });
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => {
+        call += 1;
+        if (call === 1) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: { message: '服务暂时不可用' } }), {
+              status: 500,
+              headers: { 'Content-Type': 'application/json' },
+            }),
+          );
+        }
+        return Promise.resolve(jsonResponse(completion(JSON.stringify(STYLE_CHECK_RESULT))));
+      }),
+    );
+
+    const dialog = await openStyleCheck(user);
+    await user.click(within(dialog).getByRole('button', { name: '检查文风' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/服务|错误|失败/u);
+
+    await user.click(within(dialog).getByRole('button', { name: '重试' }));
+    expect(await within(dialog).findByText(STYLE_CHECK_RESULT.summary)).toBeInTheDocument();
+  });
+
+  it('关闭不写：不产生提案，正文保持作者编辑的内容', async () => {
+    const user = await enterEditor();
+    const content = '雪落了整夜。';
+    await user.type(screen.getByLabelText('章节正文'), content);
+    await waitFor(() => expect(screen.getByText('已保存')).toBeInTheDocument(), { timeout: 3000 });
+    stubStyleCheck();
+
+    const dialog = await openStyleCheck(user);
+    await user.click(within(dialog).getByRole('button', { name: '检查文风' }));
+    await within(dialog).findByText(STYLE_CHECK_RESULT.summary);
+    await user.click(within(dialog).getByRole('button', { name: '关闭' }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '检查文风' })).not.toBeInTheDocument(),
+    );
+    expect(await harness.repository.listProposals(novel.id, { status: 'pending' })).toHaveLength(0);
+    const [saved] = await harness.repository.listChapters(novel.id);
+    expect(saved?.content).toBe(content);
   });
 });

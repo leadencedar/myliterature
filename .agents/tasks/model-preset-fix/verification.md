@@ -78,11 +78,17 @@
 
 ---
 
-## 6. 发现与建议（均不阻塞，P2/P3）
+## 6. 发现与建议（复核后更新，2026-10-29 11:08）
 
-1. **P2 文档陈旧**：`.agents/tasks/real-device-live-check/README.md`（task-60 交付）的 env 变量表仍写默认 `deepseek-flash` / `deepseek-v4-pro`（第 28–29 行）。live 套件实际导入 `PROVIDER_PRESETS.deepseek`，功能上已默认 `deepseek-chat`；建议把该表默认值与「需覆盖模型名」提示一起更新（避免误导维护者）。
-2. **P3 沙盒假夹具**：`ux/run-demo.mjs`、`ux/device-check.mjs` 的假 LLM localStorage 仍写 `deepseek-flash` / `deepseek-v4-pro`；只用于被拦截的 mock 端点，不影响产品默认值，可选一致性清理。
-3. 负向 grep 断言（`SettingsPage.test.tsx:54`）保留合理，建议后续若再加旧名历史，统一在文档区说明。
+初版报告曾记 2 条 P2/P3 陈旧项；复核当前工作区后确认**均已在工作区修复**（不是本报告作者改的，也未再动任何文件）：
+
+1. **P2 已修复**：`.agents/tasks/real-device-live-check/README.md` 的 env 表现在 `REAL_LLM_MODEL` / `REAL_LLM_STRONG_MODEL` 默认值均写「预置 `deepseek-chat`」，并补充「应用 DeepSeek 预置已改为官方 deepseek-chat（常规与重点任务同模型）；如需用其他模型再显式覆盖…」。
+2. **P3 已修复**：`ux/run-demo.mjs`、`ux/device-check.mjs` 的假 LLM settings 均为 `model: 'deepseek-chat'` / `strongModel: 'deepseek-chat'`，两个脚本内旧名 grep = 0（仅 mock 夹具，本无产品影响）。
+3. 全仓旧名剩余项均属**预期/历史**：
+   - `src/features/settings/SettingsPage.test.tsx:54` —— 负向断言（证明不出现旧名）；
+   - `docs/开发计划.md:1686` —— 变更说明句「应用原先的 deepseek-flash / deepseek-v4-pro 会 404」，解释修复必要性的历史描述；
+   - `.agents/` 下历史报告/任务文档/transcript（历史证据，不宜改写）。
+   即「代码/文档（排除历史说明与负向断言）」当前已严格零命中。
 
 ---
 
@@ -97,6 +103,7 @@
 
 ## 8. 可提交性
 
-- 失败项：**无**。
+- 失败项：**无**；§6 的 P2/P3 复核后确认已修复，不构成遗留。
+- **提交后状态（2026-10-29 11:10 复核）**：Lead 已提交为 `369fc49`（「修 DeepSeek 预置模型名」），包含本报告/`preset-check.mjs`/`behavior-check.json`、`presets.ts`、`SettingsPage`、docs、live README、ux 夹具与相关测试同步；提交后 `src/` 工作区 clean，提交内容与 QA 验证时一致，门禁结果仍然有效。
 - 静态 + 运行时 + 真实 Key 交叉印证均通过；默认/串行全量与 typecheck/build 全绿。
 - **建议提交。** QA 未 commit；`preset-check.mjs` / `behavior-check.json` 为本任务验证产物（在任务目录内），随报告保留即可。

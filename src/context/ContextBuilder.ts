@@ -85,6 +85,8 @@ export interface ScenarioChapterContext {
 export type ContextItemKind =
   | 'meta'
   | 'style'
+  /** M4 文风锚点：作者此前正文的开头节选，只用于对齐语感 */
+  | 'styleAnchor'
   | 'norm'
   | 'pinned'
   | 'entry'

@@ -22,6 +22,7 @@ import { TranslateSheet } from './TranslateSheet';
 import { GenerateChapterSheet } from './GenerateChapterSheet';
 import { useIncompleteDraft, useIncompleteDrafts } from './incompleteDrafts';
 import { NormCheckSheet, type NormCheckSession } from './NormCheckSheet';
+import { StyleCheckSheet } from './StyleCheckSheet';
 import { displayNormTitle, locateQuote, type ResolvedCheckIssue } from './normCheck';
 import { ReviseSheet } from './ReviseSheet';
 import {
@@ -179,6 +180,8 @@ export function ChapterEditorScreen({
    * 不落库：检查便宜可重跑，而正文一改结果就过期，库里留一份过期判断只会误导
    */
   const [normCheckOpen, setNormCheckOpen] = useState(false);
+  /** 文风漂移检查面板：只读诊断，结果只存在本次会话 */
+  const [styleCheckOpen, setStyleCheckOpen] = useState(false);
   const [normCheck, setNormCheck] = useState<NormCheckSession | null>(null);
   const [ignoredKeys, setIgnoredKeys] = useState<string[]>([]);
   const [checkReason, setCheckReason] = useState<string | null>(null);
@@ -648,7 +651,7 @@ export function ChapterEditorScreen({
           </IconButton>
         </div>
 
-        {/* flex-wrap：多了「按规范检查」后 375px 宽放不下，换行而不是溢出 */}
+        {/* flex-wrap：多了「按规范检查」与「检查文风」后 375px 宽放不下，换行而不是溢出 */}
         <div className="reading-column flex flex-wrap items-center gap-3 gap-y-1.5 px-3 pb-2 text-xs text-ink-500 lg:px-1">
           <span>{label}</span>
           <span>{wordCount} 字</span>
@@ -693,6 +696,21 @@ export function ChapterEditorScreen({
             ].join(' ')}
           >
             {openIssueCount > 0 ? `检查结果 ${openIssueCount}` : '按规范检查'}
+          </button>
+
+          {/* 文风漂移检查：与「按规范检查」并列；没有正文时禁用（没东西可对照） */}
+          <button
+            type="button"
+            disabled={!content.trim()}
+            onClick={() => setStyleCheckOpen(true)}
+            className={[
+              'tap-target inline-flex items-center justify-center rounded-full px-2.5 py-1 text-[0.6875rem] font-medium transition-colors',
+              content.trim()
+                ? 'bg-paper-sunken text-ink-500'
+                : 'bg-paper-sunken text-ink-300 opacity-60',
+            ].join(' ')}
+          >
+            检查文风
           </button>
 
           <button
@@ -908,6 +926,15 @@ export function ChapterEditorScreen({
         {...(reviseSeed
           ? { initialAction: reviseSeed.action, initialInstruction: reviseSeed.instruction }
           : {})}
+      />
+
+      <StyleCheckSheet
+        open={styleCheckOpen}
+        novel={context.novel}
+        style={context.style}
+        chapter={{ ...chapter, content }}
+        chapters={context.chapters}
+        onClose={() => setStyleCheckOpen(false)}
       />
 
       <NormCheckSheet

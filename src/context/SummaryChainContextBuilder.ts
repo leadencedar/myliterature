@@ -27,6 +27,7 @@ import {
   type ContextRequest,
 } from './ContextBuilder';
 import { renderEntry, renderSummary } from './renderEntry';
+import { selectStyleAnchor } from './styleAnchor';
 import { estimateTokens } from './tokens';
 
 /**
@@ -34,7 +35,7 @@ import { estimateTokens } from './tokens';
  *
  * 装箱顺序即优先级，超预算时从**末尾**开始丢：
  *
- *   稳定前缀  1 作品信息 → 2 风格档案 → 3 写作规范 → 4 核心设定 → 5 勾选的关联条目
+ *   稳定前缀  1 作品信息 → 2 风格档案 → 2.5 文风锚点（有则） → 3 写作规范 → 4 核心设定 → 5 勾选的关联条目
  *   易变后缀  6 大纲位置 → 7 全书进展 → 8 最近章节摘要 → 9 上一章结尾
  *
  * 两点值得说明：
@@ -102,6 +103,31 @@ export class SummaryChainContextBuilder implements ContextBuilder {
         true,
       ),
     );
+
+    // 文风锚点（M4 S1）：作者此前正文的开头节选，用于对齐句式、节奏与叙述距离。
+    // 放在风格档案之后、写作规范之前；每章选出的锚点可能随目标章推进而变，所以比规范更靠前。
+    // 没有锚点（第一章/更早正文不足 300 字）时完全不产生文本与清单项，输出与改动前逐字节一致。
+    const anchor = request.targetChapterId
+      ? selectStyleAnchor(chapters, request.targetChapterId, track === null ? '第' : '外传第')
+      : null;
+    if (anchor) {
+      const anchorText = [
+        `【文风锚点 · ${anchor.label}（作者本人原文）】`,
+        '下面这段是作者此前写下的正文。只用来对齐句式、节奏与叙述距离；不要复述或照搬其中的情节与句子。',
+        anchor.text,
+      ].join('\n');
+      // 非强制：锚点是对齐语感的辅助材料，预算紧张时先让位给设定与大纲
+      const taken = take(
+        {
+          kind: 'styleAnchor',
+          id: anchor.chapterId,
+          label: `文风锚点 · ${anchor.label}`,
+          tokens: estimateTokens(anchorText),
+        },
+        anchorText,
+      );
+      if (taken) stableParts.push(taken);
+    }
 
     // 写作规范：作者定下的约束，与风格档案同属整本书的底色，放在核心设定之前，
     // 这样确认新的核心设定不会让规范失去缓存。不参与预算裁剪，和核心设定同理 ——

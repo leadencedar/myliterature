@@ -24,6 +24,8 @@ export type TaskKind =
   | 'norm-condense'
   /** 按写作规范审读一章，列出可能违反之处（只提示，不改正文） */
   | 'norm-check'
+  /** 诊断一章是否偏离风格档案与文风锚点（只诊断，不改稿） */
+  | 'style-check'
   /** 互动推演的一步：流式情节 + 结构化尾部（挑战、选项、世界线变化） */
   | 'interactive-step'
   /** 互动推演的收尾：作者要求在这一步写出结局 */
@@ -170,6 +172,15 @@ export const TASK_PROFILES: Record<TaskKind, TaskProfile> = {
     useStrongModel: false,
     structured: true,
     label: '按规范检查',
+  },
+  'style-check': {
+    // 诊断任务要稳定：同一段文字反复检查不应给出飘忽的结论
+    thinking: true,
+    reasoningEffort: 'high',
+    temperature: 0.3,
+    useStrongModel: true,
+    structured: true,
+    label: '检查文风',
   },
   /**
    * 互动推演的五个任务同样不加进设置页的 TASK_ORDER，避免改设置页。
