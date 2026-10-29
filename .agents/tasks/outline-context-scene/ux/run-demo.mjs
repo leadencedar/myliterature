@@ -198,14 +198,21 @@ async function installModelMock(page, mockLog) {
       response_format: body.response_format?.type ?? null,
       max_tokens: body.max_tokens ?? null,
       messages: Array.isArray(body.messages)
-        ? body.messages.map((message) => ({ role: message.role, chars: String(message.content ?? '').length }))
+        ? body.messages.map((message) => ({
+            role: message.role,
+            chars: String(message.content ?? '').length,
+          }))
         : [],
     });
     log(
       'mock',
-      stream ? '流式请求（chapter-draft / 继续补写）' : '结构化请求（outline-expand / extract-settings / outline-continue）',
+      stream
+        ? '流式请求（chapter-draft / 继续补写）'
+        : '结构化请求（outline-expand / extract-settings / outline-continue）',
       `model=${body.model ?? '?'} max_tokens=${body.max_tokens ?? '无'} response_format=${body.response_format?.type ?? '无'} messages=${JSON.stringify(
-        (body.messages ?? []).map((message) => `${message.role}:${String(message.content ?? '').length}字`),
+        (body.messages ?? []).map(
+          (message) => `${message.role}:${String(message.content ?? '').length}字`,
+        ),
       )}`,
     );
     const messages = Array.isArray(body.messages) ? body.messages : [];
@@ -240,7 +247,7 @@ async function installModelMock(page, mockLog) {
         id: 'mock-completion',
         object: 'chat.completion',
         created: 0,
-        model: body.model ?? 'deepseek-flash',
+        model: body.model ?? 'deepseek-chat',
         choices: [
           {
             index: 0,
@@ -361,8 +368,8 @@ async function main() {
             presetId: 'deepseek',
             baseUrl: 'https://api.deepseek.com',
             apiKey: 'sk-demo-fake-key-for-ux-sandbox',
-            model: 'deepseek-flash',
-            strongModel: 'deepseek-v4-pro',
+            model: 'deepseek-chat',
+            strongModel: 'deepseek-chat',
             capabilities: {
               jsonSchema: false,
               thinkingToggle: true,
@@ -401,8 +408,10 @@ async function main() {
         oneLiner: '失忆剑客追查灭门案，在渡口被迫与旧敌同船。',
       });
       const categories = await repo.listCategories(novel.id);
-      const worldCategory = categories.find((category) => category.kind === 'worldbuilding') ?? categories[0];
-      const characterCategory = categories.find((category) => category.kind === 'character') ?? categories[1];
+      const worldCategory =
+        categories.find((category) => category.kind === 'worldbuilding') ?? categories[0];
+      const characterCategory =
+        categories.find((category) => category.kind === 'character') ?? categories[1];
 
       const shen = await repo.createEntry(novel.id, {
         categoryId: characterCategory.id,
@@ -508,7 +517,18 @@ async function main() {
         genre: '武侠',
         oneLiner: '一个旧渡口的故事，从十年前写起。',
       });
-      const backfillTitles = ['旧渡口', '夜航', '灯下', '追兵', '渡资', '雪夜', '远山', '旧簪', '回声', '北上'];
+      const backfillTitles = [
+        '旧渡口',
+        '夜航',
+        '灯下',
+        '追兵',
+        '渡资',
+        '雪夜',
+        '远山',
+        '旧簪',
+        '回声',
+        '北上',
+      ];
       for (let index = 0; index < backfillTitles.length; index += 1) {
         const chapterIndex = index + 1;
         const backfillChapter = await repo.createChapter(backfillNovel.id, {
@@ -567,10 +587,18 @@ async function main() {
     const nodeDialog = page.getByRole('dialog', { name: '大纲节点' });
     await nodeDialog.waitFor({ state: 'visible', timeout: 10_000 });
     await waitText(page, '本次注入');
-    const injectionText = await visibleText(nodeDialog.getByText('本次注入').locator('xpath=..'), 900);
+    const injectionText = await visibleText(
+      nodeDialog.getByText('本次注入').locator('xpath=..'),
+      900,
+    );
     log('03', '打开「第一卷 渡口」节点抽屉', `注入清单：${injectionText}`);
     await nodeDialog.getByText('本次注入').scrollIntoViewIfNeeded();
-    await shot(page, '03', 'after-01-node-injection-mobile.png', 'after：本次注入（核心 / 手工关联 / 名字提到）');
+    await shot(
+      page,
+      '03',
+      'after-01-node-injection-mobile.png',
+      'after：本次注入（核心 / 手工关联 / 名字提到）',
+    );
 
     // 3) 细化 → 提案（P1：单提案按钮无「（1）」；review 区显示共 N 章细目）
     await page.getByRole('button', { name: '细化这一节点' }).click();
@@ -587,7 +615,12 @@ async function main() {
     await nodeDialog.evaluate((element) => {
       element.scrollTop = element.scrollHeight - element.clientHeight;
     });
-    await shot(page, '04', 'after-02-refine-proposal-mobile.png', 'after：场景卡细目提案（共 3 章，可编辑）');
+    await shot(
+      page,
+      '04',
+      'after-02-refine-proposal-mobile.png',
+      'after：场景卡细目提案（共 3 章，可编辑）',
+    );
 
     // 4) 采用 → 关联确认（P1：没有「全部保留」，直接「确认关联（6 条）」）
     await acceptAll.click();
@@ -595,7 +628,12 @@ async function main() {
     await linkDialog.waitFor({ state: 'visible', timeout: 20_000 });
     const linkText = await visibleText(linkDialog, 1100);
     log('05', '采用细目后弹出「确认自动关联」', linkText);
-    await shot(page, '05', 'after-03-link-confirm-mobile.png', 'after：只剩「全部跳过 / 确认关联（6 条）」+ 关闭不写入说明');
+    await shot(
+      page,
+      '05',
+      'after-03-link-confirm-mobile.png',
+      'after：只剩「全部跳过 / 确认关联（6 条）」+ 关闭不写入说明',
+    );
     await linkDialog.getByRole('button', { name: '确认关联（6 条）' }).click();
     await linkDialog.waitFor({ state: 'hidden', timeout: 10_000 });
     log('06', '点击「确认关联（6 条）」', '默认全选，关联已写入；面板关闭');
@@ -604,37 +642,69 @@ async function main() {
 
     // 5) 打开章节编辑器 → 生成本章（P1：具体场景区间）
     await page.getByRole('button', { name: '继续写第 1 章' }).click();
-    await page.getByRole('button', { name: '生成本章' }).waitFor({ state: 'visible', timeout: 15_000 });
+    await page
+      .getByRole('button', { name: '生成本章' })
+      .waitFor({ state: 'visible', timeout: 15_000 });
     log('07', '打开章节编辑器（第 1 章 夜渡）', '点击「生成本章」');
     await page.getByRole('button', { name: '生成本章' }).click();
     await waitText(page, '本次注入');
     const targetLine = await visibleText(page.getByText(/目标字数：\d+ 字（来源：/u).first(), 120);
     const sceneRange = await visibleText(page.getByText(/场景数参考：约/u).first(), 120);
-    const injectSheetText = await visibleText(page.getByRole('dialog', { name: '生成本章正文' }), 1000);
-    log('08', '生成本章面板打开', `目标来源行：${targetLine}；${sceneRange}；面板：${injectSheetText}`);
-    await shot(page, '08', 'after-04-generate-form-mobile.png', 'after：目标字数来源 + 具体场景区间');
+    const injectSheetText = await visibleText(
+      page.getByRole('dialog', { name: '生成本章正文' }),
+      1000,
+    );
+    log(
+      '08',
+      '生成本章面板打开',
+      `目标来源行：${targetLine}；${sceneRange}；面板：${injectSheetText}`,
+    );
+    await shot(
+      page,
+      '08',
+      'after-04-generate-form-mobile.png',
+      'after：目标字数来源 + 具体场景区间',
+    );
 
     // 6) 开始生成 → 假流式返回截断（P1：X 字 / 目标 N 字）
     const startButton = page.getByRole('button', { name: '开始生成' });
     await startButton.scrollIntoViewIfNeeded();
     await startButton.click({ timeout: 20_000 });
     await waitText(page, '生成被截断', 20_000);
-    const truncatedText = await visibleText(page.getByRole('dialog', { name: '生成本章正文' }), 1200);
+    const truncatedText = await visibleText(
+      page.getByRole('dialog', { name: '生成本章正文' }),
+      1200,
+    );
     log('09', '收到 finish_reason:"length"', truncatedText);
-    await shot(page, '09', 'after-05-generation-truncated-mobile.png', 'after：X 字 / 目标 6000 字 + 截断说明');
+    await shot(
+      page,
+      '09',
+      'after-05-generation-truncated-mobile.png',
+      'after：X 字 / 目标 6000 字 + 截断说明',
+    );
 
     // 7) 采用截断稿 → 新二次确认文案 → 编辑器未完成提示（P0）
     await page.getByRole('button', { name: /采用为正文|替换正文/u }).click();
     const confirmDialog = page.getByRole('dialog', { name: '仍要采用不完整内容？' });
     await confirmDialog.waitFor({ state: 'visible', timeout: 10_000 });
     log('10', '点击采用，出现二次确认（新文案）', await visibleText(confirmDialog, 500));
-    await shot(page, '10', 'after-06-accept-confirm-mobile.png', 'after：二次确认「采用后本章仍是草稿…」');
+    await shot(
+      page,
+      '10',
+      'after-06-accept-confirm-mobile.png',
+      'after：二次确认「采用后本章仍是草稿…」',
+    );
     await confirmDialog.getByRole('button', { name: '仍要采用' }).click();
     await confirmDialog.waitFor({ state: 'hidden', timeout: 10_000 });
     await waitText(page, '本章由未完成生成稿采用', 15_000);
     const noticeText = await visibleText(page.getByRole('status').first(), 300);
     log('11', '采用截断稿后回到编辑器（未完成留痕）', noticeText);
-    await shot(page, '11', 'after-07-editor-incomplete-notice-mobile.png', 'after：编辑器「未完成生成稿」提示条 + 知道了');
+    await shot(
+      page,
+      '11',
+      'after-07-editor-incomplete-notice-mobile.png',
+      'after：编辑器「未完成生成稿」提示条 + 知道了',
+    );
     await page.getByRole('button', { name: '知道了' }).click();
     log('12', '点击「知道了」', '提示条关闭；已生成正文保留');
 
@@ -643,8 +713,12 @@ async function main() {
     const doneChapterButton = page.getByRole('button', { name: '继续写第 2 章' });
     await doneChapterButton.waitFor({ state: 'visible', timeout: 20_000 });
     await doneChapterButton.click();
-    await page.getByRole('button', { name: '生成本章' }).waitFor({ state: 'visible', timeout: 15_000 });
-    await page.getByRole('button', { name: '已完成' }).waitFor({ state: 'visible', timeout: 10_000 });
+    await page
+      .getByRole('button', { name: '生成本章' })
+      .waitFor({ state: 'visible', timeout: 15_000 });
+    await page
+      .getByRole('button', { name: '已完成' })
+      .waitFor({ state: 'visible', timeout: 10_000 });
     log('13', '打开「第 2 章 灯」（已完成）', '状态按钮显示「已完成」');
     await shot(page, '13', 'after-08-done-chapter-before-mobile.png', 'before（边界）：已完成章节');
 
@@ -661,14 +735,24 @@ async function main() {
     await waitText(page, '本章由未完成生成稿采用', 15_000);
     await page.getByRole('button', { name: '草稿' }).waitFor({ state: 'visible', timeout: 10_000 });
     log('14', '已完成章节采用截断稿', '状态退回「草稿」+ 未完成提示条（task-17 边界）');
-    await shot(page, '14', 'after-09-done-chapter-demoted-mobile.png', 'after（边界）：已完成 → 草稿 + 未完成提示');
+    await shot(
+      page,
+      '14',
+      'after-09-done-chapter-demoted-mobile.png',
+      'after（边界）：已完成 → 草稿 + 未完成提示',
+    );
 
     // 9) 桌面宽度关键页（1280×800）
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`${BASE}/write`, { waitUntil: 'load' });
     await page.getByRole('button', { name: '编辑「第一卷 渡口」' }).waitFor({ timeout: 20_000 });
     log('15', '切到桌面 1280×800', '写作页');
-    await shot(page, '15', 'after-10-writing-page-desktop.png', '1280×800 写作页（细化后 3 个子节点，2 章）');
+    await shot(
+      page,
+      '15',
+      'after-10-writing-page-desktop.png',
+      '1280×800 写作页（细化后 3 个子节点，2 章）',
+    );
 
     await page.getByRole('button', { name: '编辑「第一卷 渡口」' }).click();
     const desktopDialog = page.getByRole('dialog', { name: '大纲节点' });
@@ -676,8 +760,12 @@ async function main() {
     await waitText(page, '本次注入');
     log('16', '桌面端打开节点抽屉', '注入清单可见');
     await desktopDialog.getByText('本次注入').scrollIntoViewIfNeeded();
-    await shot(page, '16', 'after-11-node-sheet-desktop.png', '1280×800 节点抽屉（右侧抽屉）+ 本次注入');
-
+    await shot(
+      page,
+      '16',
+      'after-11-node-sheet-desktop.png',
+      '1280×800 节点抽屉（右侧抽屉）+ 本次注入',
+    );
 
     // ================================================================
     // M2 体验（task-23）：归档状态行 / 查看 inbox / 采用本批 / 设置开关 / S4 继续补写
@@ -687,30 +775,63 @@ async function main() {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${BASE}/write`, { waitUntil: 'load' });
     await page.getByRole('button', { name: '继续写第 1 章' }).click();
-    await page.getByRole('button', { name: '生成本章' }).waitFor({ state: 'visible', timeout: 15_000 });
+    await page
+      .getByRole('button', { name: '生成本章' })
+      .waitFor({ state: 'visible', timeout: 15_000 });
     log('17', 'M2：打开第 1 章并标记完成', 'draft→done 应触发后台归档（不弹 Sheet）');
     await page.getByRole('button', { name: '草稿' }).click();
     await waitText(page, '本章摘要与设定已生成', 20_000);
-    log('18', '后台归档完成（无 Sheet 弹出）', await visibleText(page.getByRole('status').first(), 300));
-    await shot(page, '17', 'm2-01-archive-status-mobile.png', 'M2：本章摘要与设定已生成 + 查看（不阻塞编辑）');
+    log(
+      '18',
+      '后台归档完成（无 Sheet 弹出）',
+      await visibleText(page.getByRole('status').first(), 300),
+    );
+    await shot(
+      page,
+      '17',
+      'm2-01-archive-status-mobile.png',
+      'M2：本章摘要与设定已生成 + 查看（不阻塞编辑）',
+    );
 
     await page.getByRole('button', { name: '查看' }).click();
     const inboxDialog = page.getByRole('dialog', { name: '本章摘要与设定待确认' });
     await inboxDialog.waitFor({ state: 'visible', timeout: 10_000 });
     log('19', '打开「本章摘要与设定待确认」', await visibleText(inboxDialog, 900));
-    await shot(page, '18', 'm2-02-archive-inbox-mobile.png', 'M2：本章摘要与设定待确认（摘要/进展/条目）');
+    await shot(
+      page,
+      '18',
+      'm2-02-archive-inbox-mobile.png',
+      'M2：本章摘要与设定待确认（摘要/进展/条目）',
+    );
 
     // M2.1：安全默认——只有「对已有条目的合并/替换」被标记为忽略；摘要/进展默认选中
-    await shot(page, 'M2.1-a', 'm2.1-01-archive-safety-mobile.png', 'M2.1：安全提示 + 条目合并默认「已标记为忽略」；摘要/进展默认选中');
+    await shot(
+      page,
+      'M2.1-a',
+      'm2.1-01-archive-safety-mobile.png',
+      'M2.1：安全提示 + 条目合并默认「已标记为忽略」；摘要/进展默认选中',
+    );
     await inboxDialog.getByRole('button', { name: '纳入本批' }).first().click();
     await page.waitForTimeout(250);
-    await shot(page, 'M2.1-b', 'm2.1-02-archive-restored-mobile.png', 'M2.1：点「纳入本批」后条目合并重新纳入（采用本批（4））');
+    await shot(
+      page,
+      'M2.1-b',
+      'm2.1-02-archive-restored-mobile.png',
+      'M2.1：点「纳入本批」后条目合并重新纳入（采用本批（4））',
+    );
     const auditBlock = page.getByText('本批伏笔流水').locator('xpath=..');
     await auditBlock.screenshot({ path: join(SHOTS_DIR, 'm2.1-03-thread-audit-mobile.png') });
-    log('M2.1-c', '截图 m2.1-03-thread-audit-mobile.png', 'M2.1：本章伏笔流水（新埋/收束/现存 + 误收束提示）');
+    log(
+      'M2.1-c',
+      '截图 m2.1-03-thread-audit-mobile.png',
+      'M2.1：本章伏笔流水（新埋/收束/现存 + 误收束提示）',
+    );
     await inboxDialog.getByRole('button', { name: /采用本批/u }).click();
     await inboxDialog.waitFor({ state: 'hidden', timeout: 10_000 });
-    await page.getByText('本章摘要与设定已生成').waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => {});
+    await page
+      .getByText('本章摘要与设定已生成')
+      .waitFor({ state: 'hidden', timeout: 10_000 })
+      .catch(() => {});
     log('20', '采用本批', '摘要/进展/条目落库；状态行清空');
     await shot(page, '19', 'm2-03-archive-accepted-mobile.png', 'M2：采用本批后状态行清空');
 
@@ -718,10 +839,17 @@ async function main() {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`${BASE}/write`, { waitUntil: 'load' });
     await page.getByRole('button', { name: '继续写第 2 章' }).click();
-    await page.getByRole('button', { name: '生成本章' }).waitFor({ state: 'visible', timeout: 15_000 });
+    await page
+      .getByRole('button', { name: '生成本章' })
+      .waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByRole('button', { name: '草稿' }).click();
     await waitText(page, '本章摘要与设定已生成', 20_000);
-    await shot(page, '20', 'm2-04-archive-status-desktop.png', 'M2 桌面：本章摘要与设定已生成 + 查看');
+    await shot(
+      page,
+      '20',
+      'm2-04-archive-status-desktop.png',
+      'M2 桌面：本章摘要与设定已生成 + 查看',
+    );
     await page.getByRole('button', { name: '查看' }).click();
     const desktopInbox = page.getByRole('dialog', { name: '本章摘要与设定待确认' });
     await desktopInbox.waitFor({ state: 'visible', timeout: 10_000 });
@@ -736,19 +864,32 @@ async function main() {
     const archiveToggle = page.getByLabel('完成后自动生成本章摘要与设定');
     await archiveToggle.waitFor({ state: 'visible', timeout: 15_000 });
     // 设置页很长：显式滚动到「写作辅助」区块，并记录 scrollY 以便排查
-    await page.getByText('写作辅助').evaluate((element) => element.scrollIntoView({ block: 'center' }));
+    await page
+      .getByText('写作辅助')
+      .evaluate((element) => element.scrollIntoView({ block: 'center' }));
     await page.waitForTimeout(500);
     log('22a', '设置页滚动位置', `scrollY=${await page.evaluate(() => window.scrollY)}`);
-    await shot(page, '22', 'm2-06-settings-helper-mobile.png', 'M2：设置页「写作辅助」开关 + 成本说明');
+    await shot(
+      page,
+      '22',
+      'm2-06-settings-helper-mobile.png',
+      'M2：设置页「写作辅助」开关 + 成本说明',
+    );
     await archiveToggle.uncheck();
     log('22', '关闭「完成后自动生成本章摘要与设定」', '');
 
     await page.goto(`${BASE}/write`, { waitUntil: 'load' });
     await page.getByRole('button', { name: '继续写第 3 章' }).click();
-    await page.getByRole('button', { name: '生成本章' }).waitFor({ state: 'visible', timeout: 15_000 });
+    await page
+      .getByRole('button', { name: '生成本章' })
+      .waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByRole('button', { name: '草稿' }).click();
     await waitText(page, '自动归档已关闭', 10_000);
-    log('23', 'autoArchive=false：标记完成不调用模型', await visibleText(page.getByRole('status').first(), 200));
+    log(
+      '23',
+      'autoArchive=false：标记完成不调用模型',
+      await visibleText(page.getByRole('status').first(), 200),
+    );
     await shot(page, '23', 'm2-07-autoarchive-off-mobile.png', 'M2：自动归档关闭；可手动补摘要');
 
     // 10d) S4：短稿差额提示 → 继续补写 → 追加后提示消失
@@ -759,15 +900,28 @@ async function main() {
     await startThird.click({ timeout: 20_000 });
     await waitText(page, '生成被截断', 20_000);
     await waitText(page, '比目标少约', 10_000);
-    log('24', 'S4：短稿/截断出现差额提示', await visibleText(page.getByText(/比目标少约/u).first(), 200));
+    log(
+      '24',
+      'S4：短稿/截断出现差额提示',
+      await visibleText(page.getByText(/比目标少约/u).first(), 200),
+    );
     await shot(page, '24', 'm2-08-continue-prompt-mobile.png', 'M2-S4：比目标少约 X 字 + 继续补写');
     const continueButton = page.getByRole('button', { name: '继续补写' });
     await continueButton.scrollIntoViewIfNeeded();
     await continueButton.click();
     // 假流式立即返回约 2600 字：等「比目标少约」消失，证明补到 85% 以上
     await page.getByText(/比目标少约/u).waitFor({ state: 'hidden', timeout: 15_000 });
-    log('25', 'S4：继续补写完成，差额提示消失', await visibleText(page.getByRole('dialog', { name: '生成本章正文' }), 500));
-    await shot(page, '25', 'm2-09-continue-result-mobile.png', 'M2-S4：补写已追加；达到目标后提示消失');
+    log(
+      '25',
+      'S4：继续补写完成，差额提示消失',
+      await visibleText(page.getByRole('dialog', { name: '生成本章正文' }), 500),
+    );
+    await shot(
+      page,
+      '25',
+      'm2-09-continue-result-mobile.png',
+      'M2-S4：补写已追加；达到目标后提示消失',
+    );
 
     // ================================================================
     // M3：导入旧稿 1:1 回溯大纲 → 前沿续写 3 章（task-49 沙盒）
@@ -794,7 +948,12 @@ async function main() {
     const backfillDialog = page.getByRole('dialog', { name: '按已有章节生成大纲' });
     await backfillDialog.waitFor({ state: 'visible', timeout: 10_000 });
     log('M3-a', '打开「按已有章节生成大纲」预览', await visibleText(backfillDialog, 900));
-    await shot(page, 'M3-1', 'm3-01-backfill-preview-mobile.png', 'M3：导入 10 章 → 1:1 回溯预览（数量/标题/摘要截断）');
+    await shot(
+      page,
+      'M3-1',
+      'm3-01-backfill-preview-mobile.png',
+      'M3：导入 10 章 → 1:1 回溯预览（数量/标题/摘要截断）',
+    );
     await backfillDialog.getByRole('button', { name: '生成 10 个章节节点' }).click();
     await backfillDialog
       .getByText('已生成 10 个节点，可手动分卷。')
@@ -805,7 +964,12 @@ async function main() {
       .getByRole('button', { name: '编辑「旧渡口」' })
       .waitFor({ state: 'visible', timeout: 15_000 });
     log('M3-b', '回溯完成：大纲树出现 10 个章节节点', await visibleText(page.locator('body'), 500));
-    await shot(page, 'M3-2', 'm3-02-backfill-outline-mobile.png', 'M3：确认后 1:1 节点 + 章节关联；入口消失、续写入口出现');
+    await shot(
+      page,
+      'M3-2',
+      'm3-02-backfill-outline-mobile.png',
+      'M3：确认后 1:1 节点 + 章节关联；入口消失、续写入口出现',
+    );
 
     // 12) 回到连载作品：前沿续写 3 章 → 提案 → 采用
     await switchActiveNovel(seed.novelId);
@@ -815,13 +979,23 @@ async function main() {
     const continueDialog = page.getByRole('dialog', { name: '规划后续 3–5 章大纲' });
     await continueDialog.waitFor({ state: 'visible', timeout: 10_000 });
     log('M3-c', '打开「规划后续 3–5 章大纲」', await visibleText(continueDialog, 700));
-    await shot(page, 'M3-3', 'm3-03-continue-panel-mobile.png', 'M3：续写面板「本次依据」（大纲尾部/进展/最近摘要/伏笔）');
+    await shot(
+      page,
+      'M3-3',
+      'm3-03-continue-panel-mobile.png',
+      'M3：续写面板「本次依据」（大纲尾部/进展/最近摘要/伏笔）',
+    );
     await continueDialog.getByRole('button', { name: '规划 3 章大纲' }).click();
     await continueDialog
       .getByText('已生成提案，确认后写入大纲。')
       .waitFor({ state: 'visible', timeout: 20_000 });
     log('M3-d', '续写提案', await visibleText(continueDialog, 1200));
-    await shot(page, 'M3-4', 'm3-04-continue-proposal-mobile.png', 'M3：续写提案（3 章：场清单/冲突/钩子/引用设定/伏笔）+ 本次注入');
+    await shot(
+      page,
+      'M3-4',
+      'm3-04-continue-proposal-mobile.png',
+      'M3：续写提案（3 章：场清单/冲突/钩子/引用设定/伏笔）+ 本次注入',
+    );
     await continueDialog.getByRole('button', { name: '采用这份续写' }).click();
     await continueDialog.waitFor({ state: 'hidden', timeout: 15_000 });
     const adoptedFirst = page.getByRole('button', { name: '编辑「续章1 北岸」' });
@@ -829,7 +1003,12 @@ async function main() {
     await adoptedFirst.scrollIntoViewIfNeeded();
     await page.waitForTimeout(400);
     log('M3-e', '采用续写后大纲树', await visibleText(page.locator('body'), 600));
-    await shot(page, 'M3-5', 'm3-05-continue-adopted-mobile.png', 'M3：采用后新节点追加到末卷；已有章节/设定不变');
+    await shot(
+      page,
+      'M3-5',
+      'm3-05-continue-adopted-mobile.png',
+      'M3：采用后新节点追加到末卷；已有章节/设定不变',
+    );
 
     // 13) M3.2：超出目标可见（目标 4000，生成约 5000 字 = 125%）
     await page.getByRole('button', { name: '继续写第 4 章' }).click();
@@ -861,11 +1040,17 @@ async function main() {
       `after 截图 11 张 + M2 截图 9 张 + M2.1 截图 3 张 + M3 截图 5 张 + M3.2 截图 1 张；mock 请求 ${mockLog.length} 次（stream: ${mockLog.filter((item) => item.stream).length}）；页面异常 ${pageErrors.length} 个`,
     );
 
-    writeFileSync(join(SHOTS_DIR, 'walkthrough-data.json'), `${JSON.stringify({ seed, mockLog, pageErrors, transcript }, null, 2)}\n`);
+    writeFileSync(
+      join(SHOTS_DIR, 'walkthrough-data.json'),
+      `${JSON.stringify({ seed, mockLog, pageErrors, transcript }, null, 2)}\n`,
+    );
     return { ok: pageErrors.length === 0, pageErrors };
   } catch (error) {
     log('!!', '走查中断', String(error?.stack ?? error).slice(0, 1200));
-    writeFileSync(join(SHOTS_DIR, 'walkthrough-data.json'), `${JSON.stringify({ mockLog, pageErrors, transcript }, null, 2)}\n`);
+    writeFileSync(
+      join(SHOTS_DIR, 'walkthrough-data.json'),
+      `${JSON.stringify({ mockLog, pageErrors, transcript }, null, 2)}\n`,
+    );
     throw error;
   } finally {
     try {

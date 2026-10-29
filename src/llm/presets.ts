@@ -28,8 +28,8 @@ export const PROVIDER_PRESETS: Record<ProviderPresetId, ProviderPreset> = {
     id: 'deepseek',
     label: 'DeepSeek',
     baseUrl: 'https://api.deepseek.com',
-    model: 'deepseek-flash',
-    strongModel: 'deepseek-v4-pro',
+    model: 'deepseek-chat',
+    strongModel: 'deepseek-chat',
     capabilities: {
       // DeepSeek 只提供 json_object：保证合法 JSON，不保证贴合 schema
       jsonSchema: false,
@@ -38,7 +38,7 @@ export const PROVIDER_PRESETS: Record<ProviderPresetId, ProviderPreset> = {
       streamUsage: true,
     },
     consoleUrl: 'https://platform.deepseek.com/api_keys',
-    note: '中文写作性价比高，低峰时段（北京时间 00:30–08:30）价格减半。',
+    note: '默认模型 deepseek-chat（可手动改成更强的模型）。中文写作性价比高，低峰时段（北京时间 00:30–08:30）价格减半。',
   },
   openai: {
     id: 'openai',

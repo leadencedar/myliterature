@@ -317,7 +317,7 @@ describe('生成与确认', () => {
     expect(userMessage?.content).toContain('不分卷');
     // 立项是结构化推理任务：开思维链 + 用重点任务模型
     expect(body.thinking).toEqual({ type: 'enabled' });
-    expect(body.model).toBe('deepseek-v4-pro');
+    expect(body.model).toBe('deepseek-chat');
   });
 
   it('额外要求会带进请求', async () => {

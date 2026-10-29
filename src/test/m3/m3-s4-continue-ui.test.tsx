@@ -208,7 +208,7 @@ describe('M3-S4 · 生成 → 提案 → 采用', () => {
     expect(await within(dialog).findByText('已生成提案，确认后写入大纲。')).toBeInTheDocument();
     // 请求体：强模型、结构化、块顺序、续写章数
     expect(bodies).toHaveLength(1);
-    expect(bodies[0]!.model).toBe('deepseek-v4-pro');
+    expect(bodies[0]!.model).toBe('deepseek-chat');
     expect(bodies[0]!.stream).not.toBe(true);
     const messages = bodies[0]!.messages as { role: string; content: string }[];
     const system = messages.find((message) => message.role === 'system')!.content;

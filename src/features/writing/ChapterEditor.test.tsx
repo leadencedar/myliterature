@@ -363,7 +363,7 @@ describe('整章生成', () => {
     expect(body.max_tokens).toBe(6200);
     // 正文创作关闭思维链、用常规模型、走流式
     expect(body.thinking).toEqual({ type: 'disabled' });
-    expect(body.model).toBe('deepseek-flash');
+    expect(body.model).toBe('deepseek-chat');
     expect(body.stream).toBe(true);
   });
 

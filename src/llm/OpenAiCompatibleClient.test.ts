@@ -29,7 +29,7 @@ function makeClient(
 }
 
 const BASIC: ChatRequest = {
-  model: 'deepseek-flash',
+  model: 'deepseek-chat',
   messages: [{ role: 'user', content: '你好' }],
 };
 

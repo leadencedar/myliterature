@@ -398,7 +398,7 @@ describe('AI 细化为子节点', () => {
     expect(userMessage).toContain('失忆剑客');
     // 细化是结构化推理任务
     expect(body.thinking).toEqual({ type: 'enabled' });
-    expect(body.model).toBe('deepseek-v4-pro');
+    expect(body.model).toBe('deepseek-chat');
     expect(entry.id).toBeTruthy();
   });
 

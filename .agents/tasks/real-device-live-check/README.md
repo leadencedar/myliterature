@@ -25,12 +25,11 @@ export REAL_LLM_API_KEY=sk-xxx
 | 变量                    | 默认值                          | 说明                                      |
 | ----------------------- | ------------------------------- | ----------------------------------------- |
 | `REAL_LLM_BASE_URL`     | 预置 `https://api.deepseek.com` | OpenAI 兼容端点                           |
-| `REAL_LLM_MODEL`        | 预置 `deepseek-flash`           | A / C 使用的常规模型                      |
-| `REAL_LLM_STRONG_MODEL` | 预置 `deepseek-v4-pro`          | B（前沿大纲，生产用强模型）               |
+| `REAL_LLM_MODEL`        | 预置 `deepseek-chat`            | A / C 使用的常规模型                      |
+| `REAL_LLM_STRONG_MODEL` | 预置 `deepseek-chat`            | B（前沿大纲，生产用强模型）               |
 | `LIVE_TARGET_WORDS`     | `1200`                          | C 整章生成目标字数（可设 3000/6000 复测） |
 
-> 若你的端点使用官方 DeepSeek 模型名，请显式覆盖：
-> `REAL_LLM_MODEL=deepseek-chat REAL_LLM_STRONG_MODEL=deepseek-chat npm run test:live`
+> 应用 DeepSeek 预置已改为官方 `deepseek-chat`（常规与重点任务同模型）；如需用其他模型，再显式覆盖 `REAL_LLM_MODEL` / `REAL_LLM_STRONG_MODEL`。
 
 ## 如何运行
 

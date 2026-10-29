@@ -40,7 +40,7 @@ function clientWith(
 function run(client: OpenAiCompatibleClient, extra?: Record<string, unknown>) {
   return generateStructured({
     client,
-    model: 'deepseek-flash',
+    model: 'deepseek-chat',
     schema: CharacterSchema,
     schemaName: 'Character',
     system: '你是小说设定助手。',
@@ -204,7 +204,7 @@ describe('结构化生成', () => {
 
     await generateStructured({
       client,
-      model: 'deepseek-flash',
+      model: 'deepseek-chat',
       schema: WithDefault,
       schemaName: 'WithDefault',
       system: 'sys',

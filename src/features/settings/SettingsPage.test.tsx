@@ -1,6 +1,7 @@
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PROVIDER_PRESETS } from '@/llm/presets';
 import { useLlmSettings } from '@/llm/settingsStore';
 import { jsonResponse, sseResponse, textDeltaEvents } from '@/test/llmFixtures';
 import { createTestHarness, type TestHarness } from '@/test/renderWithProviders';
@@ -37,8 +38,21 @@ describe('设置页 · 模型配置', () => {
     render(<SettingsPage />);
 
     expect(screen.getByLabelText('接口地址')).toHaveValue('https://api.deepseek.com');
-    expect(screen.getByLabelText('常规模型')).toHaveValue('deepseek-flash');
-    expect(screen.getByLabelText('重点任务模型')).toHaveValue('deepseek-v4-pro');
+    expect(screen.getByLabelText('常规模型')).toHaveValue('deepseek-chat');
+    expect(screen.getByLabelText('重点任务模型')).toHaveValue('deepseek-chat');
+  });
+
+  it('应用 DeepSeek 预置后常规与重点任务都是官方可用的 deepseek-chat', () => {
+    useLlmSettings.getState().applyPreset('deepseek');
+    const settings = useLlmSettings.getState();
+    // 回归：真实 endpoint 只认 deepseek-chat，旧预置名会 404
+    expect(settings.model).toBe('deepseek-chat');
+    expect(settings.strongModel).toBe('deepseek-chat');
+    expect(PROVIDER_PRESETS.deepseek.model).toBe('deepseek-chat');
+    expect(PROVIDER_PRESETS.deepseek.strongModel).toBe('deepseek-chat');
+    expect(`${settings.model} ${settings.strongModel}`).not.toMatch(
+      /deepseek-flash|deepseek-v4-pro/u,
+    );
   });
 
   it('API Key 默认遮蔽，可切换显示', async () => {
@@ -79,11 +93,11 @@ describe('设置页 · 模型配置', () => {
 
     const setup = screen.getByText('生成世界观与大纲').closest('li');
     // 立项走重点任务模型且开思维链
-    expect(setup).toHaveTextContent('deepseek-v4-pro');
+    expect(setup).toHaveTextContent('deepseek-chat');
     expect(setup).toHaveTextContent('开启思维链');
 
     const draft = screen.getByText('生成章节正文').closest('li');
-    expect(draft).toHaveTextContent('deepseek-flash');
+    expect(draft).toHaveTextContent('deepseek-chat');
     expect(draft).toHaveTextContent('关闭思维链');
   });
 });
@@ -135,7 +149,7 @@ describe('设置页 · 连通性测试', () => {
 
     const body = JSON.parse(String(fetchSpy.mock.calls[0]![1]?.body)) as Record<string, unknown>;
     expect(body).toMatchObject({
-      model: 'deepseek-flash',
+      model: 'deepseek-chat',
       stream: true,
       thinking: { type: 'disabled' },
     });

@@ -1,0 +1,98 @@
+{
+  "generatedAt": "2026-10-29T03:03:39.266Z",
+  "results": [
+    {
+      "name": "PRESET.model === deepseek-chat",
+      "ok": true,
+      "detail": "deepseek-chat"
+    },
+    {
+      "name": "PRESET.strongModel === deepseek-chat",
+      "ok": true,
+      "detail": "deepseek-chat"
+    },
+    {
+      "name": "applyPreset 后 store.model === deepseek-chat",
+      "ok": true,
+      "detail": "deepseek-chat"
+    },
+    {
+      "name": "applyPreset 后 store.strongModel === deepseek-chat",
+      "ok": true,
+      "detail": "deepseek-chat"
+    },
+    {
+      "name": "chapter-draft 解析模型 = deepseek-chat",
+      "ok": true,
+      "detail": "deepseek-chat"
+    },
+    {
+      "name": "outline-continue（重点任务）解析模型 = deepseek-chat",
+      "ok": true,
+      "detail": "deepseek-chat"
+    },
+    {
+      "name": "SettingsPage 常规模型值 = deepseek-chat",
+      "ok": true,
+      "detail": "deepseek-chat"
+    },
+    {
+      "name": "SettingsPage 常规模型 placeholder = deepseek-chat",
+      "ok": true,
+      "detail": "deepseek-chat"
+    },
+    {
+      "name": "SettingsPage 重点任务模型值 = deepseek-chat",
+      "ok": true,
+      "detail": "deepseek-chat"
+    },
+    {
+      "name": "SettingsPage 重点任务模型 placeholder = deepseek-chat",
+      "ok": true,
+      "detail": "deepseek-chat"
+    },
+    {
+      "name": "手动改模型名保存到 store",
+      "ok": true,
+      "detail": "my-custom-model"
+    },
+    {
+      "name": "手动改模型名持久化到 localStorage",
+      "ok": true,
+      "detail": "my-custom-model"
+    },
+    {
+      "name": "手动改模型名参与请求解析",
+      "ok": true,
+      "detail": "my-custom-model"
+    },
+    {
+      "name": "连通性测试请求体 model = deepseek-chat",
+      "ok": true,
+      "detail": "deepseek-chat"
+    },
+    {
+      "name": "outline-continue 请求体 model = deepseek-chat",
+      "ok": true,
+      "detail": "deepseek-chat"
+    },
+    {
+      "name": "本轮无 pageerror",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "bodies": [
+    {
+      "stream": true,
+      "model": "deepseek-chat",
+      "maxTokens": null
+    },
+    {
+      "stream": false,
+      "model": "deepseek-chat",
+      "maxTokens": null
+    }
+  ],
+  "pageErrors": []
+}

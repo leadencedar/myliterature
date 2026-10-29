@@ -92,17 +92,26 @@ function corsHeaders() {
 async function installModelMock(page, mockLog) {
   await page.route('https://api.deepseek.com/**', async (route) => {
     const request = route.request();
-    if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: corsHeaders() });
+    if (request.method() === 'OPTIONS')
+      return route.fulfill({ status: 204, headers: corsHeaders() });
     let body = {};
     try {
       body = JSON.parse(request.postData() ?? '{}');
     } catch {
       body = {};
     }
-    mockLog.push({ stream: body.stream === true, model: body.model ?? '', at: new Date().toISOString() });
+    mockLog.push({
+      stream: body.stream === true,
+      model: body.model ?? '',
+      at: new Date().toISOString(),
+    });
     if (body.stream === true) {
       // 本检查流程不生成正文/大纲；若意外触发流式，返回 500 让问题暴露
-      return route.fulfill({ status: 500, headers: corsHeaders(), body: JSON.stringify({ error: { message: 'device-check 未预期流式请求' } }) });
+      return route.fulfill({
+        status: 500,
+        headers: corsHeaders(),
+        body: JSON.stringify({ error: { message: 'device-check 未预期流式请求' } }),
+      });
     }
     return route.fulfill({
       status: 200,
@@ -111,7 +120,7 @@ async function installModelMock(page, mockLog) {
         id: 'mock-completion',
         object: 'chat.completion',
         created: 0,
-        model: body.model ?? 'deepseek-flash',
+        model: body.model ?? 'deepseek-chat',
         choices: [
           {
             index: 0,
@@ -221,7 +230,21 @@ async function checkButton(page, name) {
   const inViewport = Boolean(
     box && viewport && box.x >= -1 && box.x + box.width <= viewport.width + 1,
   );
-  return { name, exists, visible, enabled, inViewport, box: box ? { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) } : null };
+  return {
+    name,
+    exists,
+    visible,
+    enabled,
+    inViewport,
+    box: box
+      ? {
+          x: Math.round(box.x),
+          y: Math.round(box.y),
+          w: Math.round(box.width),
+          h: Math.round(box.height),
+        }
+      : null,
+  };
 }
 
 /**
@@ -267,8 +290,10 @@ async function seedData(page) {
       oneLiner: '失忆剑客追查灭门案，在渡口被迫与旧敌同船。',
     });
     const categories = await repo.listCategories(novel.id);
-    const worldCategory = categories.find((category) => category.kind === 'worldbuilding') ?? categories[0];
-    const characterCategory = categories.find((category) => category.kind === 'character') ?? categories[1];
+    const worldCategory =
+      categories.find((category) => category.kind === 'worldbuilding') ?? categories[0];
+    const characterCategory =
+      categories.find((category) => category.kind === 'character') ?? categories[1];
     await repo.createEntry(novel.id, {
       categoryId: characterCategory.id,
       title: '沈砚',
@@ -306,7 +331,18 @@ async function seedData(page) {
       genre: '武侠',
       oneLiner: '一个旧渡口的故事，从十年前写起。',
     });
-    const titles = ['旧渡口', '夜航', '灯下', '追兵', '渡资', '雪夜', '远山', '旧簪', '回声', '北上'];
+    const titles = [
+      '旧渡口',
+      '夜航',
+      '灯下',
+      '追兵',
+      '渡资',
+      '雪夜',
+      '远山',
+      '旧簪',
+      '回声',
+      '北上',
+    ];
     for (let index = 0; index < titles.length; index += 1) {
       const backfillChapter = await repo.createChapter(backfillNovel.id, {
         title: titles[index],
@@ -365,7 +401,9 @@ async function runMainFlow({ device, context, checks, errors, mockLog, screensho
   const seed = await seedData(page);
   log('seed', `${device} 种子数据完成`, `连载作品 + 导入旧稿十章（10 章无大纲）`);
   await setActiveNovel(page, seed.novelId);
-  await page.getByRole('button', { name: '规划后续 3–5 章大纲' }).waitFor({ state: 'visible', timeout: 25_000 });
+  await page
+    .getByRole('button', { name: '规划后续 3–5 章大纲' })
+    .waitFor({ state: 'visible', timeout: 25_000 });
   await checkPage({
     page,
     device,
@@ -485,14 +523,20 @@ function renderReport({ checks, errors, persistenceByDevice, screenshots, mockLo
   lines.push('');
   lines.push('| 设备 | 视口 | 触摸 | DPR | Browser |');
   lines.push('| --- | --- | --- | --- | --- |');
-  lines.push('| iPhone 13（模拟） | 390×844 | 是（hasTouch） | 3 | chrome-headless-shell（Playwright 设备模拟） |');
+  lines.push(
+    '| iPhone 13（模拟） | 390×844 | 是（hasTouch） | 3 | chrome-headless-shell（Playwright 设备模拟） |',
+  );
   lines.push('| Desktop（模拟） | 1280×900 | 否 | 1 | chrome-headless-shell |');
   lines.push('');
-  lines.push(`dev server：\`${BASE}\`（脚本自启自停，端口 5201）；mock：\`https://api.deepseek.com/**\` 归档 extract JSON，共 ${mockLog.length} 次非流式请求。`);
+  lines.push(
+    `dev server：\`${BASE}\`（脚本自启自停，端口 5201）；mock：\`https://api.deepseek.com/**\` 归档 extract JSON，共 ${mockLog.length} 次非流式请求。`,
+  );
   lines.push('');
   lines.push('## 2. 每页检查结果');
   lines.push('');
-  lines.push('检查项：横向溢出 `documentElement.scrollWidth <= innerWidth+1` 且 body 同样满足；关键按钮存在/可见/可用/水平在视口内；console.error、pageerror、未处理 Promise 计数。');
+  lines.push(
+    '检查项：横向溢出 `documentElement.scrollWidth <= innerWidth+1` 且 body 同样满足；关键按钮存在/可见/可用/水平在视口内；console.error、pageerror、未处理 Promise 计数。',
+  );
   lines.push('');
   lines.push('| 设备 | 页面 | overflow | 关键按钮 | 未处理 Promise |');
   lines.push('| --- | --- | --- | --- | --- |');
@@ -514,7 +558,9 @@ function renderReport({ checks, errors, persistenceByDevice, screenshots, mockLo
     lines.push('');
     for (const error of errors) lines.push(`- [${error.device}] ${error.kind}：${error.message}`);
   }
-  const unhandled = checks.flatMap((record) => record.unhandled.map((item) => ({ device: record.device, item })));
+  const unhandled = checks.flatMap((record) =>
+    record.unhandled.map((item) => ({ device: record.device, item })),
+  );
   if (unhandled.length > 0) {
     lines.push('');
     lines.push('未处理 Promise：');
@@ -523,7 +569,9 @@ function renderReport({ checks, errors, persistenceByDevice, screenshots, mockLo
   lines.push('');
   lines.push('## 4. 刷新持久化（IndexedDB + localStorage）');
   lines.push('');
-  lines.push('| 设备 | IndexedDB novels / chapters / outlines | archive-batch keys | archive-settings | llm-settings | active-novel |');
+  lines.push(
+    '| 设备 | IndexedDB novels / chapters / outlines | archive-batch keys | archive-settings | llm-settings | active-novel |',
+  );
   lines.push('| --- | --- | --- | --- | --- | --- |');
   for (const [device, persistence] of Object.entries(persistenceByDevice)) {
     lines.push(
@@ -557,11 +605,17 @@ function renderReport({ checks, errors, persistenceByDevice, screenshots, mockLo
     unhandled.length === 0 &&
     persistenceFailures.length === 0
   ) {
-    lines.push('✅ **通过**：两设备主流程 0 横向溢出、关键按钮均可见可用、0 console/page 错误、0 未处理 Promise；刷新后 IndexedDB 与 localStorage 设置均在。');
+    lines.push(
+      '✅ **通过**：两设备主流程 0 横向溢出、关键按钮均可见可用、0 console/page 错误、0 未处理 Promise；刷新后 IndexedDB 与 localStorage 设置均在。',
+    );
   } else {
     lines.push('❌ **存在失败项**：');
-    if (overflowFailures.length) lines.push(`- 横向溢出：${overflowFailures.map((record) => `${record.device}/${record.pageName}`).join('、')}`);
-    if (buttonFailures.length) lines.push(`- 关键按钮异常：${buttonFailures.map((button) => button.name).join('、')}`);
+    if (overflowFailures.length)
+      lines.push(
+        `- 横向溢出：${overflowFailures.map((record) => `${record.device}/${record.pageName}`).join('、')}`,
+      );
+    if (buttonFailures.length)
+      lines.push(`- 关键按钮异常：${buttonFailures.map((button) => button.name).join('、')}`);
     if (errors.length) lines.push(`- 报错 ${errors.length} 条（见 §3）`);
     if (unhandled.length) lines.push(`- 未处理 Promise ${unhandled.length} 条（见 §3）`);
     if (persistenceFailures.length) lines.push('- 刷新持久化缺失（见 §4）');
@@ -569,11 +623,21 @@ function renderReport({ checks, errors, persistenceByDevice, screenshots, mockLo
   lines.push('');
   lines.push('## 7. 物理真机仍需人工（本检查不能替代）');
   lines.push('');
-  lines.push('- 手机扫码访问 dev server（同 Wi-Fi / HTTPS / 防火墙），确认实际局域网加载与 API Key 不受浏览器安全策略影响；');
-  lines.push('- 安装到主屏（PWA / iOS Safari「添加到主屏幕」），检查图标、启动图、全屏 safe-area（刘海/底部 Home indicator）；');
-  lines.push('- 真实触摸滚动、惯性滚动、双指缩放、长按选择、输入框聚焦时的软键盘遮挡与 `visualViewport` 变化；');
-  lines.push('- iOS Safari 私有模式/存储配额下的 localStorage 行为与 IndexedDB 驱逐；Android Chrome 与微信内置浏览器的差异；');
-  lines.push('- 真实网络延迟与真实模型（真实 API Key）下的流式正文、归档 extract、续写 outline-continue 的耗时/错误；');
+  lines.push(
+    '- 手机扫码访问 dev server（同 Wi-Fi / HTTPS / 防火墙），确认实际局域网加载与 API Key 不受浏览器安全策略影响；',
+  );
+  lines.push(
+    '- 安装到主屏（PWA / iOS Safari「添加到主屏幕」），检查图标、启动图、全屏 safe-area（刘海/底部 Home indicator）；',
+  );
+  lines.push(
+    '- 真实触摸滚动、惯性滚动、双指缩放、长按选择、输入框聚焦时的软键盘遮挡与 `visualViewport` 变化；',
+  );
+  lines.push(
+    '- iOS Safari 私有模式/存储配额下的 localStorage 行为与 IndexedDB 驱逐；Android Chrome 与微信内置浏览器的差异；',
+  );
+  lines.push(
+    '- 真实网络延迟与真实模型（真实 API Key）下的流式正文、归档 extract、续写 outline-continue 的耗时/错误；',
+  );
   lines.push('- 真实设备字体渲染与 DPR 截图（本报告为 Chromium 模拟，DPR3 仅为截图密度）；');
   lines.push('- 无障碍/读屏（VoiceOver/TalkBack）与深色模式（本检查未覆盖）。');
   lines.push('');
@@ -629,9 +693,14 @@ async function main() {
             presetId: 'deepseek',
             baseUrl: 'https://api.deepseek.com',
             apiKey: 'sk-device-check-fake-key',
-            model: 'deepseek-flash',
-            strongModel: 'deepseek-v4-pro',
-            capabilities: { jsonSchema: false, thinkingToggle: true, reasoningEffort: true, streamUsage: true },
+            model: 'deepseek-chat',
+            strongModel: 'deepseek-chat',
+            capabilities: {
+              jsonSchema: false,
+              thinkingToggle: true,
+              reasoningEffort: true,
+              streamUsage: true,
+            },
           },
           version: 0,
         }),
@@ -654,7 +723,11 @@ async function main() {
       checks,
       errors,
       mockLog,
-      screenshots: { writing: screenshots.writing, backfill: screenshots.backfill, archive: screenshots.archive },
+      screenshots: {
+        writing: screenshots.writing,
+        backfill: screenshots.backfill,
+        archive: screenshots.archive,
+      },
     });
     await mobileContext.close();
 
@@ -675,9 +748,14 @@ async function main() {
             presetId: 'deepseek',
             baseUrl: 'https://api.deepseek.com',
             apiKey: 'sk-device-check-fake-key',
-            model: 'deepseek-flash',
-            strongModel: 'deepseek-v4-pro',
-            capabilities: { jsonSchema: false, thinkingToggle: true, reasoningEffort: true, streamUsage: true },
+            model: 'deepseek-chat',
+            strongModel: 'deepseek-chat',
+            capabilities: {
+              jsonSchema: false,
+              thinkingToggle: true,
+              reasoningEffort: true,
+              streamUsage: true,
+            },
           },
           version: 0,
         }),
@@ -701,14 +779,27 @@ async function main() {
     });
     await desktopContext.close();
 
-    const report = renderReport({ checks, errors, persistenceByDevice, screenshots, mockLog, serverLog });
+    const report = renderReport({
+      checks,
+      errors,
+      persistenceByDevice,
+      screenshots,
+      mockLog,
+      serverLog,
+    });
     writeFileSync(join(OUT_DIR, 'report.md'), report);
     writeFileSync(join(OUT_DIR, 'transcript.txt'), `${transcript.join('\n')}\n`);
-    log('done', '检查完成', `checks=${checks.length} errors=${errors.length} 报告=ux/device-check/report.md`);
+    log(
+      'done',
+      '检查完成',
+      `checks=${checks.length} errors=${errors.length} 报告=ux/device-check/report.md`,
+    );
 
     const failed =
       checks.some((record) => record.overflow.overflow || record.unhandled.length > 0) ||
-      checks.some((record) => record.buttons.some((button) => !(button.exists && button.visible && button.enabled))) ||
+      checks.some((record) =>
+        record.buttons.some((button) => !(button.exists && button.visible && button.enabled)),
+      ) ||
       errors.length > 0;
     if (failed) process.exitCode = 1;
   } catch (error) {

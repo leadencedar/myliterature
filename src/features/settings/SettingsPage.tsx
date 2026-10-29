@@ -151,7 +151,7 @@ export function SettingsPage() {
         <TextField
           label="常规模型"
           value={settings.model}
-          placeholder="deepseek-flash"
+          placeholder="deepseek-chat"
           autoCapitalize="off"
           spellCheck={false}
           hint="用于正文写作、摘要、设定提取等大部分任务。"
@@ -161,7 +161,7 @@ export function SettingsPage() {
         <TextField
           label="重点任务模型"
           value={settings.strongModel}
-          placeholder="deepseek-v4-pro"
+          placeholder="deepseek-chat"
           autoCapitalize="off"
           spellCheck={false}
           hint="立项与大纲决定整本书的地基，会优先用这个模型。留空则与常规模型相同。"
