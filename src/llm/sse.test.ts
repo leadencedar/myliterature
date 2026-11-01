@@ -63,6 +63,44 @@ describe('SSE 解析', () => {
     expect(await collect([])).toEqual([]);
     expect(await collect(['\n\n'])).toEqual([]);
   });
+
+  it('遇到 [DONE] 会通知调用方，便于区分明确收尾与连接中断', async () => {
+    let done = 0;
+    const out: string[] = [];
+    for await (const payload of parseSseStream(
+      streamFromChunks(['data: {"a":1}\n\ndata: [DONE]\n\n']),
+      () => {
+        done += 1;
+      },
+    )) {
+      out.push(payload);
+    }
+    expect(out).toEqual(['{"a":1}']);
+    expect(done).toBe(1);
+  });
+
+  it('没有 [DONE] 时不回调', async () => {
+    let done = 0;
+    for await (const _payload of parseSseStream(streamFromChunks(['data: {"a":1}\n\n']), () => {
+      done += 1;
+    })) {
+      // 只为消费流
+    }
+    expect(done).toBe(0);
+  });
+
+  it('[DONE] 出现在没有换行收尾的最后一行时同样回调', async () => {
+    let done = 0;
+    for await (const _payload of parseSseStream(
+      streamFromChunks(['data: {"a":1}\n\ndata: [DONE]']),
+      () => {
+        done += 1;
+      },
+    )) {
+      // 只为消费流
+    }
+    expect(done).toBe(1);
+  });
 });
 
 describe('chunk 解析', () => {

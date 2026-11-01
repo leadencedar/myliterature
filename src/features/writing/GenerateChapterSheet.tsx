@@ -29,12 +29,15 @@ const SUMMARY_COUNT_OPTIONS = ['0', '2', '3', '5'].map((value) => ({
 type Phase =
   | { kind: 'form' }
   | { kind: 'streaming'; text: string }
-  /** incomplete：生成没有完整结束（撞上限被截断 / 用户中止），采用前要二次确认 */
+  /**
+   * incomplete：生成没有完整结束（撞上限截断 / 用户中止 / 服务端流中报错），
+   * 采用前要二次确认。
+   */
   | {
       kind: 'done';
       text: string;
-      incomplete?: 'truncated' | 'aborted';
-      /** 续写没有返回内容时的可见提示：原稿保留，可重试或直接采用 */
+      incomplete?: 'truncated' | 'aborted' | 'error';
+      /** 给作者的可见提示：操作没有完全成功，但内容已尽力保留 */
       notice?: string;
     }
   | { kind: 'error'; message: string; detail?: string };
@@ -88,7 +91,7 @@ interface GenerateChapterSheetProps {
   onAccept: (
     text: string,
     mode: 'replace' | 'append',
-    meta?: { incomplete?: 'truncated' | 'aborted' },
+    meta?: { incomplete?: 'truncated' | 'aborted' | 'error' },
   ) => void | Promise<void>;
 }
 
@@ -259,12 +262,19 @@ export function GenerateChapterSheet({
         setPhase({ kind: 'error', message: '模型没有返回正文，请重试。' });
         return;
       }
-      // finishReason 为 null 表示服务商没回传：视为未知，不判截断、不报错
+      // finishReason 为 null 表示服务商没回传：不判截断，但也不能当成完整结束。
+      // 只有 [DONE] 与 finish_reason 都没有（endReason === 'unknown'）时才提示未知
       const incomplete = result.finishReason === 'length' ? 'truncated' : undefined;
+      const unknownEnd = !incomplete && result.endReason === 'unknown';
       setPhase({
         kind: 'done',
         text,
         ...(incomplete ? { incomplete } : {}),
+        ...(unknownEnd
+          ? {
+              notice: '服务商没有回传结束标记，无法确认正文是否写完；建议继续补写或自行检查结尾。',
+            }
+          : {}),
       });
     } catch (cause) {
       if (cause instanceof LlmError && cause.kind === 'aborted') {
@@ -275,6 +285,18 @@ export function GenerateChapterSheet({
         return;
       }
       const error = cause instanceof LlmError ? cause : undefined;
+      // 流中报错 / 连接中断时客户端会把已经流出的正文挂在错误上：必须保留，
+      // 标记未完成后让作者继续补写或显式确认采用部分稿 —— 直接切 error 态会丢掉正文
+      const partial = error?.partial?.content ?? '';
+      if (partial.trim()) {
+        setPhase({
+          kind: 'done',
+          text: partial,
+          incomplete: 'error',
+          notice: `${error?.message ?? '生成中断'}。已保留已生成的 ${countWords(partial)} 字，可以继续补写或确认后采用部分稿。`,
+        });
+        return;
+      }
       setPhase({
         kind: 'error',
         message: error?.message ?? (cause instanceof Error ? cause.message : '生成失败'),
@@ -344,7 +366,18 @@ export function GenerateChapterSheet({
       const next = appendGenerated(base, addition);
       // 续写被截断仍算未完成：作者要能继续补，而不是被当成完整的一章
       const incomplete = result.finishReason === 'length' ? 'truncated' : undefined;
-      setPhase({ kind: 'done', text: next, ...(incomplete ? { incomplete } : {}) });
+      const unknownEnd = !incomplete && result.endReason === 'unknown';
+      setPhase({
+        kind: 'done',
+        text: next,
+        ...(incomplete ? { incomplete } : {}),
+        ...(unknownEnd
+          ? {
+              notice:
+                '服务商没有回传结束标记，无法确认这次续写是否写完；建议再补一次或自行检查结尾。',
+            }
+          : {}),
+      });
     } catch (cause) {
       if (cause instanceof LlmError && cause.kind === 'aborted') {
         // 中止时保留已经补出来的部分；一个字都没补出来就退回原来的结果，别让作者丢正文
@@ -360,10 +393,23 @@ export function GenerateChapterSheet({
         return;
       }
       const error = cause instanceof LlmError ? cause : undefined;
+      // 续写失败不能连已有生成稿一起清掉：能补出多少保留多少，
+      // 一个字都没补出来就退回原稿，并明确告诉作者这次续写没成功
+      const partial = error?.partial?.content || streamed;
+      if (partial.trim()) {
+        setPhase({
+          kind: 'done',
+          text: appendGenerated(base, partial),
+          incomplete: 'error',
+          notice: `${error?.message ?? '续写中断'}。已保留补出的内容，可以再次续写或确认后采用。`,
+        });
+        return;
+      }
       setPhase({
-        kind: 'error',
-        message: error?.message ?? (cause instanceof Error ? cause.message : '补写失败'),
-        ...(error?.detail ? { detail: error.detail } : {}),
+        kind: 'done',
+        text: base,
+        ...(previousIncomplete ? { incomplete: previousIncomplete } : {}),
+        notice: `${error?.message ?? (cause instanceof Error ? cause.message : '补写失败')}。已保留原生成稿，可以再试一次。`,
       });
     }
   }
@@ -578,7 +624,9 @@ export function GenerateChapterSheet({
                 <p className="text-sm text-seal">
                   {phase.incomplete === 'truncated'
                     ? '生成被截断，内容不完整。可以继续补写未落地场景，或重新生成；采用只会保存已生成的部分。'
-                    : '生成已中断，内容不完整。可以继续补写未落地场景，或重新生成。'}
+                    : phase.incomplete === 'error'
+                      ? '生成过程中服务端报错，内容不完整。已保留已生成的部分，可以继续补写或确认后采用。'
+                      : '生成已中断，内容不完整。可以继续补写未落地场景，或重新生成。'}
                 </p>
               </div>
             ) : null}

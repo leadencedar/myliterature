@@ -36,6 +36,14 @@ export interface ChatResult {
   usage?: TokenUsage;
   /** 服务商回传的结束原因，'length' 表示撞上了输出上限；不回传时为 null */
   finishReason: string | null;
+  /**
+   * 流是否收到了明确的结束信号（`[DONE]` 或 finish_reason）。
+   *
+   * 'unknown' 表示服务商两者都没给：不能据此判定失败（不少兼容服务商不回传），
+   * 但也不能当成完整结束 —— 上层可以自行决定是否提示「无法确认是否写完」。
+   * 非流式（chat）也有该字段，便于消费方统一判断。
+   */
+  endReason?: 'done' | 'unknown';
 }
 
 export interface TokenUsage {

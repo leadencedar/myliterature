@@ -301,6 +301,8 @@ export function ChapterEditorScreen({
   const [exitBlocked, setExitBlocked] = useState(false);
   /** 作者明确放弃未保存修改：之后失败的保存不再把数据塞回队列 */
   const discardRef = useRef(false);
+  /** 写作进度统计失败：正文已保存，但当天产出没记上，需要让作者看见 */
+  const [progressIssue, setProgressIssue] = useState(false);
 
   /**
    * 已计入当日产出的字数基准，以及本章是否已计过「完成一章」。
@@ -352,8 +354,11 @@ export function ChapterEditorScreen({
         // 只有进度真的写成功才推进基准；否则下次保存会把这段增量重新记一次
         recordedWordsRef.current = saved.wordCount;
         if (justCompleted) countedDoneRef.current = true;
+        setProgressIssue(false);
       } catch {
-        // 进度记录失败不影响正文保存；基准不推进，下次保存补记
+        // 进度记录失败不影响正文保存；基准不推进，下次保存补记。
+        // 但要给作者一个可见提示：状态行显示「已保存」的同时说明进度没记上
+        setProgressIssue(true);
       }
       invalidate();
       setSaveState('saved');
@@ -567,7 +572,7 @@ export function ChapterEditorScreen({
   async function applyGenerated(
     text: string,
     mode: 'replace' | 'append',
-    meta?: { incomplete?: 'truncated' | 'aborted' },
+    meta?: { incomplete?: 'truncated' | 'aborted' | 'error' },
   ) {
     // 空结果守卫：生成面板已经拦住空流，这里再挡一层 —— 任何调用方都不该拿
     // 空正文（replace 的 next、append 的尾巴）覆盖已有正文，否则会清空章节
@@ -792,6 +797,11 @@ export function ChapterEditorScreen({
           <span aria-live="polite" className={saveState === 'error' ? 'text-seal' : 'text-ink-300'}>
             {SAVE_LABELS[saveState]}
           </span>
+          {progressIssue ? (
+            <span role="status" className="text-accent">
+              写作进度未记录（正文已保存，下次保存补记）
+            </span>
+          ) : null}
           {/* 桌面端提示快捷键。窄屏没有物理键盘，显示它只是占地方 */}
           <span className="hidden text-ink-300 lg:inline">⌘/Ctrl + S 保存</span>
           {canUndo ? (

@@ -9,6 +9,13 @@
 /** 从字节流中逐条取出 `data:` 载荷，遇到 [DONE] 即结束 */
 export async function* parseSseStream(
   stream: ReadableStream<Uint8Array>,
+  /**
+   * 收到 `[DONE]` 时回调。
+   *
+   * 调用方需要区分「服务商明确收尾」和「连接被掐断就没了」：两种情况都不报错，
+   * 但前者可以当完整结果，后者要提示「无法确认是否写完」。
+   */
+  onDone?: () => void,
 ): AsyncGenerator<string, void, undefined> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -34,7 +41,10 @@ export async function* parseSseStream(
         if (!line.startsWith('data:')) continue;
 
         const payload = line.slice('data:'.length).trim();
-        if (payload === '[DONE]') return;
+        if (payload === '[DONE]') {
+          onDone?.();
+          return;
+        }
         yield payload;
       }
     }
@@ -43,7 +53,8 @@ export async function* parseSseStream(
     const tail = buffer.trim();
     if (tail.startsWith('data:')) {
       const payload = tail.slice('data:'.length).trim();
-      if (payload !== '[DONE]') yield payload;
+      if (payload === '[DONE]') onDone?.();
+      else yield payload;
     }
   } finally {
     reader.releaseLock();
@@ -66,6 +77,17 @@ export interface ChatStreamChunk {
     prompt_cache_hit_tokens?: number;
     prompt_tokens_details?: { cached_tokens?: number };
   } | null;
+  /**
+   * 服务端在流中返回的错误载荷。
+   *
+   * 部分兼容服务商不用 HTTP 状态码表达失败：先正常流一段正文，再发一帧
+   * `{"error":{...}}` 然后关闭连接。不识别这一帧就会把半章当成正常完成。
+   */
+  error?: {
+    message?: string;
+    type?: string;
+    code?: string | number;
+  };
 }
 
 /**

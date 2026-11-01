@@ -1947,6 +1947,8 @@ describe('保存失败恢复与串行保存（审计 §3.1）', () => {
     });
     expect((await harness.repository.listChapters(novel.id))[0]?.content).toBe('雪落了整夜。');
     expect(progress).toHaveBeenCalledTimes(1);
+    // 可见提示：正文已保存，但当天写作进度没记上
+    expect(screen.getByText(/写作进度未记录/u)).toBeInTheDocument();
 
     // 基准没有推进，下一次保存会把这段增量补记回来
     await user.type(screen.getByLabelText('章节正文'), '天亮了。');
@@ -1954,5 +1956,7 @@ describe('保存失败恢复与串行保存（审计 §3.1）', () => {
       const logs = await harness.repository.listDailyLogs(novel.id, { from: today, to: today });
       expect(logs[0]?.words).toBe(10);
     });
+    // 进度补记成功后，提示消失
+    await waitFor(() => expect(screen.queryByText(/写作进度未记录/u)).not.toBeInTheDocument());
   });
 });
