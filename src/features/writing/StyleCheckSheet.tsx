@@ -8,9 +8,11 @@ import { Sheet } from '@/ui/Sheet';
 import {
   STYLE_CHECK_SEVERITY_LABELS,
   runStyleCheck,
+  type StyleCheckIssue,
   type StyleCheckResult,
   type StyleCheckSeverity,
 } from '@/features/style/styleCheck';
+import { locateQuote } from './normCheck';
 
 type RunState =
   | { kind: 'idle' }
@@ -27,8 +29,9 @@ const SEVERITY_STYLES: Record<StyleCheckSeverity, string> = {
 /**
  * 文风漂移检查面板（M4 S2）。
  *
- * 只读诊断：面板不接收任何写正文的回调，也没有「应用建议 / 自动改写」——
- * 这是 D6 的边界：AI 可以指出哪句不像作者，但改不改、怎么改由作者自己动手。
+ * 只读诊断：面板本身不写正文；「定位」只改编辑器选区，「按建议改写」只把建议预填进
+ * 段落加工，写入仍要作者在那里面点「替换原文」。这是 D6 的边界：AI 可以指出哪句不像
+ * 作者、甚至给改写方向，但改不改、怎么改由作者确认。
  */
 export function StyleCheckSheet({
   open,
@@ -36,6 +39,9 @@ export function StyleCheckSheet({
   style,
   chapter,
   chapters,
+  content,
+  onLocate,
+  onRevise,
   onClose,
 }: {
   open: boolean;
@@ -44,11 +50,15 @@ export function StyleCheckSheet({
   /** 当前编辑中的章节快照（content 为编辑器里的最新正文） */
   chapter: Chapter;
   chapters: readonly Chapter[];
+  /** 编辑器当前正文：用于判断 issue 的 excerpt 是否还能定位 */
+  content: string;
+  onLocate: (issue: StyleCheckIssue) => void;
+  onRevise: (issue: StyleCheckIssue) => void;
   onClose: () => void;
 }) {
   const llm = useLlm();
   const [state, setState] = useState<RunState>({ kind: 'idle' });
-  const hasContent = chapter.content.trim().length > 0;
+  const hasContent = content.trim().length > 0;
 
   async function check() {
     setState({ kind: 'running' });
@@ -72,9 +82,11 @@ export function StyleCheckSheet({
     }
   }
 
-  /** 关闭不写：检查结果只在本次面板会话里，关掉即丢 */
+  /**
+   * 关闭不写，且**保留本次诊断**：重新打开仍可逐条定位/改写（与规范检查一致）。
+   * 换章时编辑器整体卸载，state 自然重置，不会把上一章的诊断带到新章节。
+   */
   function close() {
-    setState({ kind: 'idle' });
     onClose();
   }
 
@@ -86,9 +98,20 @@ export function StyleCheckSheet({
       onClose={close}
       footer={
         state.kind === 'done' ? (
-          <Button variant="primary" size="lg" block onClick={close}>
-            完成
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="lg"
+              block
+              disabled={!hasContent || !llm.configured}
+              onClick={() => void check()}
+            >
+              重新检查
+            </Button>
+            <Button variant="primary" size="lg" block onClick={close}>
+              完成
+            </Button>
+          </div>
         ) : (
           <Button
             variant="primary"
@@ -117,7 +140,7 @@ export function StyleCheckSheet({
             只给诊断，最多 5 条，每条必须引用原文；不改稿、不生成提案。
           </p>
           <p className="text-xs leading-relaxed text-ink-500">
-            本章约 {countWords(chapter.content)} 字，检查一次调用。
+            本章约 {countWords(content)} 字，检查一次调用。
           </p>
           <p className="text-xs leading-relaxed text-ink-500">
             只对照风格档案与锚点，不逐个人物核对口吻。
@@ -162,38 +185,63 @@ export function StyleCheckSheet({
             </p>
           ) : (
             <ul className="flex flex-col gap-2">
-              {state.result.issues.map((issue, index) => (
-                <li
-                  key={`${index}-${issue.dimension}`}
-                  className="flex flex-col gap-1 rounded-xl border border-ink-100 px-3 py-2"
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span
-                      className={[
-                        'rounded-full px-2 py-0.5 text-[0.6875rem] font-medium',
-                        SEVERITY_STYLES[issue.severity],
-                      ].join(' ')}
-                    >
-                      {STYLE_CHECK_SEVERITY_LABELS[issue.severity]}
-                    </span>
-                    <span className="text-xs font-medium text-ink-700">{issue.dimension}</span>
-                  </div>
-                  <p className="rounded-lg bg-paper-sunken px-2.5 py-1.5 text-sm leading-relaxed text-ink-700">
-                    <span className="text-xs text-ink-500">原文：</span>
-                    <span className="font-reading">「{issue.excerpt}」</span>
-                  </p>
-                  <p className="text-xs leading-relaxed text-ink-700">
-                    <span className="text-ink-500">依据：</span>
-                    {issue.basis}
-                  </p>
-                  <p className="text-xs leading-relaxed text-ink-500">建议：{issue.suggestion}</p>
-                </li>
-              ))}
+              {state.result.issues.map((issue, index) => {
+                // 作者可能在看结果前已经改过正文：找不到原文证据就不能假装能定位
+                const locatable = locateQuote(content, issue.excerpt) !== null;
+                return (
+                  <li
+                    key={`${index}-${issue.dimension}`}
+                    className="flex flex-col gap-1 rounded-xl border border-ink-100 px-3 py-2"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={[
+                          'rounded-full px-2 py-0.5 text-[0.6875rem] font-medium',
+                          SEVERITY_STYLES[issue.severity],
+                        ].join(' ')}
+                      >
+                        {STYLE_CHECK_SEVERITY_LABELS[issue.severity]}
+                      </span>
+                      <span className="text-xs font-medium text-ink-700">{issue.dimension}</span>
+                    </div>
+                    <p className="rounded-lg bg-paper-sunken px-2.5 py-1.5 text-sm leading-relaxed text-ink-700">
+                      <span className="text-xs text-ink-500">原文：</span>
+                      <span className="font-reading">「{issue.excerpt}」</span>
+                    </p>
+                    <p className="text-xs leading-relaxed text-ink-700">
+                      <span className="text-ink-500">依据：</span>
+                      {issue.basis}
+                    </p>
+                    <p className="text-xs leading-relaxed text-ink-500">建议：{issue.suggestion}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <Button
+                        size="md"
+                        variant="secondary"
+                        disabled={!locatable}
+                        onClick={() => onLocate(issue)}
+                      >
+                        定位
+                      </Button>
+                      <Button
+                        size="md"
+                        variant="secondary"
+                        disabled={!locatable}
+                        onClick={() => onRevise(issue)}
+                      >
+                        按建议改写
+                      </Button>
+                      {!locatable ? (
+                        <span className="text-xs text-ink-300">原文已被修改，找不到</span>
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
 
           <p className="text-xs leading-relaxed text-ink-500">
-            只给诊断，不改稿；是否采纳、怎么改由你决定。
+            定位只选中原文；按建议改写会打开段落加工，仍要你确认替换。
           </p>
         </>
       ) : null}

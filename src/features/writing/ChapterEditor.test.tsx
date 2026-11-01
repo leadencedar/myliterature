@@ -1549,7 +1549,7 @@ describe('检查文风（M4 S2）', () => {
 
   it('一次调用：请求含风格与正文；结果含 severity/维度/引用/建议；无改写按钮', async () => {
     const user = await enterEditor();
-    const content = '雪落了整夜，他心中想到，这大概就是命运。';
+    const content = '雪落了整夜。他心中想到，这大概就是命运。';
     await user.type(screen.getByLabelText('章节正文'), content);
     await waitFor(() => expect(screen.getByText('已保存')).toBeInTheDocument(), { timeout: 3000 });
     const bodies = stubStyleCheck();
@@ -1599,10 +1599,14 @@ describe('检查文风（M4 S2）', () => {
     expect(userMessage).toContain('这大概就是命运');
     expect(userMessage).not.toContain('文风锚点');
 
-    // 只读诊断：不提供任何应用建议/自动改写入口
+    // 没有「应用建议/自动替换」：动作只到定位与段落加工预填
     expect(
-      within(dialog).queryByRole('button', { name: /应用|改写|替换|润色|采用建议/u }),
+      within(dialog).queryByRole('button', { name: /应用|替换|润色|采用建议|自动/u }),
     ).not.toBeInTheDocument();
+    // 每条都该有定位/按建议改写；两条 excerpt 都在正文里 → 均可点
+    expect(within(dialog).getAllByRole('button', { name: '定位' })).toHaveLength(2);
+    expect(within(dialog).getAllByRole('button', { name: '按建议改写' })).toHaveLength(2);
+    expect(within(dialog).getAllByRole('button', { name: '定位' })[0]).toBeEnabled();
   });
 
   it('没有问题时明确显示「未发现明显文风漂移」', async () => {
@@ -1665,5 +1669,91 @@ describe('检查文风（M4 S2）', () => {
     expect(await harness.repository.listProposals(novel.id, { status: 'pending' })).toHaveLength(0);
     const [saved] = await harness.repository.listChapters(novel.id);
     expect(saved?.content).toBe(content);
+  });
+
+  it('定位：关闭文风面板并选中原文，不改正文', async () => {
+    const user = await enterEditor();
+    const content = '雪落了整夜。他心中想到，这大概就是命运。';
+    await user.type(screen.getByLabelText('章节正文'), content);
+    await waitFor(() => expect(screen.getByText('已保存')).toBeInTheDocument(), { timeout: 3000 });
+    stubStyleCheck();
+
+    const dialog = await openStyleCheck(user);
+    await user.click(within(dialog).getByRole('button', { name: '检查文风' }));
+    await within(dialog).findByText(STYLE_CHECK_RESULT.summary);
+
+    await user.click(within(dialog).getAllByRole('button', { name: '定位' })[0]!);
+
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '检查文风' })).not.toBeInTheDocument(),
+    );
+    const textarea = screen.getByLabelText('章节正文') as HTMLTextAreaElement;
+    const excerpt = STYLE_CHECK_RESULT.issues[0]!.excerpt;
+    const start = content.indexOf(excerpt);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(textarea.selectionStart).toBe(start);
+    expect(textarea.selectionEnd).toBe(start + excerpt.length);
+    // 只选中，不写正文、不出提案
+    const [saved] = await harness.repository.listChapters(novel.id);
+    expect(saved?.content).toBe(content);
+    expect(await harness.repository.listProposals(novel.id, { status: 'pending' })).toHaveLength(0);
+  });
+
+  it('按建议改写：打开段落加工并预填建议+依据，仍要作者确认替换', async () => {
+    const user = await enterEditor();
+    const content = '雪落了整夜。他心中想到，这大概就是命运。';
+    await user.type(screen.getByLabelText('章节正文'), content);
+    await waitFor(() => expect(screen.getByText('已保存')).toBeInTheDocument(), { timeout: 3000 });
+    const bodies = stubStyleCheck();
+
+    const dialog = await openStyleCheck(user);
+    await user.click(within(dialog).getByRole('button', { name: '检查文风' }));
+    await within(dialog).findByText(STYLE_CHECK_RESULT.summary);
+    const issue = STYLE_CHECK_RESULT.issues[0]!;
+
+    await user.click(within(dialog).getAllByRole('button', { name: '按建议改写' })[0]!);
+
+    const revise = await screen.findByRole('dialog', { name: '加工这一段' });
+    expect(within(revise).getByText(/已选中 \d+ 字/u)).toBeInTheDocument();
+    const instruction = within(revise).getByLabelText('额外要求（可选）') as HTMLTextAreaElement;
+    expect(instruction.value).toContain(`按文风检查建议修改：${issue.suggestion}`);
+    expect(instruction.value).toContain(`依据：${issue.basis}`);
+    // 预填不等于写入：未点「替换原文」前正文不变，也没多请求
+    const [saved] = await harness.repository.listChapters(novel.id);
+    expect(saved?.content).toBe(content);
+    expect(bodies).toHaveLength(1);
+  });
+
+  it('原文已被修改时禁用定位/改写；关闭重开仍保留本次诊断', async () => {
+    const user = await enterEditor();
+    const content = '雪落了整夜。他心中想到，这大概就是命运。';
+    await user.type(screen.getByLabelText('章节正文'), content);
+    await waitFor(() => expect(screen.getByText('已保存')).toBeInTheDocument(), { timeout: 3000 });
+    stubStyleCheck();
+
+    let dialog = await openStyleCheck(user);
+    await user.click(within(dialog).getByRole('button', { name: '检查文风' }));
+    await within(dialog).findByText(STYLE_CHECK_RESULT.summary);
+    await user.click(within(dialog).getByRole('button', { name: '完成' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '检查文风' })).not.toBeInTheDocument(),
+    );
+
+    // 改掉正文里被引用的原句
+    const textarea = screen.getByLabelText('章节正文');
+    await user.clear(textarea);
+    await user.type(textarea, '江雾压得很低，船夫撑着篙。');
+    await waitFor(() => expect(screen.getByText('已保存')).toBeInTheDocument(), { timeout: 3000 });
+
+    // 重开：诊断还在（结果保留），但原文已变 → 动作禁用 + 提示
+    dialog = await openStyleCheck(user);
+    expect(within(dialog).getByText(STYLE_CHECK_RESULT.summary)).toBeInTheDocument();
+    expect(within(dialog).getAllByText('原文已被修改，找不到')).toHaveLength(2);
+    expect(within(dialog).getAllByRole('button', { name: '定位' })[0]).toBeDisabled();
+    expect(within(dialog).getAllByRole('button', { name: '按建议改写' })[0]).toBeDisabled();
+    // 边界文案
+    expect(
+      within(dialog).getByText(/定位只选中原文；按建议改写会打开段落加工，仍要你确认替换。/u),
+    ).toBeInTheDocument();
   });
 });

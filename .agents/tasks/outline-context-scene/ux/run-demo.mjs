@@ -130,14 +130,14 @@ const STYLE_CHECK_RESULT = {
     {
       dimension: '叙述距离',
       severity: 'high',
-      excerpt: '他听见自己的心跳，比河声还响。',
+      excerpt: '灯下的旧稿',
       basis: '这句从现场动作切到总结性心理，叙述距离比第 1 章开头拉远了。',
       suggestion: '把回忆压到动作后面，别直接解释。',
     },
     {
       dimension: '句式',
       severity: 'medium',
-      excerpt: '船到河心，风更急了。',
+      excerpt: '有人在茶棚里提起旧簪。',
       basis: '连续短句比第 1 章开头的长句更碎，节奏偏快。',
       suggestion: '短句连用可以合并一处。',
     },
@@ -987,10 +987,18 @@ async function main() {
       page,
       'M4-2',
       'm4-02-style-check-mobile.png',
-      'M4：检查文风结果（severity/维度/原文/建议；无改写按钮）',
+      'M4：检查文风结果（severity/维度/原文/建议；定位/按建议改写按钮）',
     );
-    await styleDialog.getByRole('button', { name: '完成' }).click();
-    await styleDialog.waitFor({ state: 'hidden', timeout: 10_000 });
+
+    // M4.2：按建议改写 → 段落加工预填（suggestion + basis），仍未写正文
+    await styleDialog.getByRole('button', { name: '按建议改写' }).first().click();
+    const reviseDialog = page.getByRole('dialog', { name: '加工这一段' });
+    await reviseDialog.waitFor({ state: 'visible', timeout: 10_000 });
+    const prefill = await reviseDialog.getByLabel('额外要求（可选）').inputValue();
+    log('M4-3', '按建议改写预填', prefill);
+    await shot(page, 'M4-3', 'm4-03-style-revise-mobile.png', 'M4.2：按建议改写打开段落加工并预填建议+依据');
+    await reviseDialog.getByRole('button', { name: '关闭' }).click();
+    await reviseDialog.waitFor({ state: 'hidden', timeout: 10_000 });
 
     // ================================================================
     // M3：导入旧稿 1:1 回溯大纲 → 前沿续写 3 章（task-49 沙盒）
@@ -1106,7 +1114,7 @@ async function main() {
     log(
       '30',
       '走查完成',
-      `after 截图 11 张 + M2 截图 9 张 + M2.1 截图 3 张 + M3 截图 5 张 + M3.2 截图 1 张 + M4 截图 2 张；mock 请求 ${mockLog.length} 次（stream: ${mockLog.filter((item) => item.stream).length}）；页面异常 ${pageErrors.length} 个`,
+      `after 截图 11 张 + M2 截图 9 张 + M2.1 截图 3 张 + M3 截图 5 张 + M3.2 截图 1 张 + M4 截图 3 张；mock 请求 ${mockLog.length} 次（stream: ${mockLog.filter((item) => item.stream).length}）；页面异常 ${pageErrors.length} 个`,
     );
 
     writeFileSync(

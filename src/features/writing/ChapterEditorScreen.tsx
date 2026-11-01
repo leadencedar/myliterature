@@ -23,6 +23,7 @@ import { GenerateChapterSheet } from './GenerateChapterSheet';
 import { useIncompleteDraft, useIncompleteDrafts } from './incompleteDrafts';
 import { NormCheckSheet, type NormCheckSession } from './NormCheckSheet';
 import { StyleCheckSheet } from './StyleCheckSheet';
+import type { StyleCheckIssue } from '@/features/style/styleCheck';
 import { displayNormTitle, locateQuote, type ResolvedCheckIssue } from './normCheck';
 import { ReviseSheet } from './ReviseSheet';
 import {
@@ -616,6 +617,36 @@ export function ChapterEditorScreen({
     setReviseOpen(true);
   }
 
+  /**
+   * 文风检查的「定位」：用当前正文重新找 excerpt 并选中，关闭文风面板。
+   * 只改选区，不写正文；找不到（作者已改过原句）返回 false。
+   */
+  function selectStyleIssueQuote(issue: StyleCheckIssue): boolean {
+    const range = locateQuote(content, issue.excerpt);
+    if (!range) return false;
+    setStyleCheckOpen(false);
+    const element = textareaRef.current;
+    if (element) {
+      element.focus();
+      element.setSelectionRange(range.start, range.end);
+    }
+    setSelectionRange(range);
+    return true;
+  }
+
+  /**
+   * 文风检查的「按建议改写」：定位后打开段落加工并预填 rewrite + 建议与依据，
+   * 仍由作者点「替换原文」才写入。不自动写正文、不出提案。
+   */
+  function reviseStyleIssue(issue: StyleCheckIssue) {
+    if (!selectStyleIssueQuote(issue)) return;
+    setReviseSeed({
+      action: 'rewrite',
+      instruction: `按文风检查建议修改：${issue.suggestion}（依据：${issue.basis}）`,
+    });
+    setReviseOpen(true);
+  }
+
   return (
     <div
       role="dialog"
@@ -934,6 +965,9 @@ export function ChapterEditorScreen({
         style={context.style}
         chapter={{ ...chapter, content }}
         chapters={context.chapters}
+        content={content}
+        onLocate={(issue) => void selectStyleIssueQuote(issue)}
+        onRevise={reviseStyleIssue}
         onClose={() => setStyleCheckOpen(false)}
       />
 

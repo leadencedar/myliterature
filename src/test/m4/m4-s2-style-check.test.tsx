@@ -15,7 +15,8 @@ import type { Chapter, Novel, StyleProfile } from '@/domain/schema';
 import { useLlmSettings } from '@/llm/settingsStore';
 import type { LlmRunner, StructuredRunOptions } from '@/llm/useLlm';
 import type { TaskKind } from '@/llm/taskProfiles';
-import { completion, jsonResponse } from '@/test/llmFixtures';
+import { completion, jsonResponse, sseResponse, textDeltaEvents } from '@/test/llmFixtures';
+import { locateQuote } from '@/features/writing/normCheck';
 import { createTestHarness, type TestHarness } from '@/test/renderWithProviders';
 import { WritingPage } from '@/features/writing/WritingPage';
 import {
@@ -280,11 +281,14 @@ describe('M4-S2 · Schema 与 prompt 单元', () => {
 
 // ---------------------------------------------------------------- UI
 
-function stubStyleCheck(payload: unknown = CHECK_RESULT) {
+function stubStyleCheck(payload: unknown = CHECK_RESULT, revisedText = '改写后的句子。') {
   const bodies: Record<string, unknown>[] = [];
   const fetchSpy = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
     bodies.push(body);
+    if (body.stream === true) {
+      return Promise.resolve(sseResponse(textDeltaEvents([revisedText], [])));
+    }
     return Promise.resolve(jsonResponse(completion(JSON.stringify(payload))));
   });
   vi.stubGlobal('fetch', fetchSpy);
@@ -309,7 +313,7 @@ async function openStyleSheet(user: ReturnType<typeof userEvent.setup>) {
 describe('M4-S2 · 编辑器 UI', () => {
   it('入口存在；打开面板不请求；点面板内按钮才 1 次调用；结果含 severity/原文/建议/锚点；无改写按钮', async () => {
     const ch1 = await makeChapter('源头', '江雾'.repeat(220), 'done');
-    const target = await makeChapter('目标章', '本章正文。');
+    const target = await makeChapter('目标章', '他忽然想起很多年前的事。雪落了整夜，追兵在门外。');
     const beforeProposals = await harness.repository.listProposals(novel.id);
     const { fetchSpy, bodies } = stubStyleCheck();
     const user = await renderEditor();
@@ -358,13 +362,18 @@ describe('M4-S2 · 编辑器 UI', () => {
     ).toBeInTheDocument();
     expect(within(dialog).getByText(/依据：风格档案 \+ 文风锚点/u)).toBeInTheDocument();
     expect(within(dialog).getByText(`对照锚点：第 1 章开头`)).toBeInTheDocument();
+    // M4.2：每条 issue 有「定位 / 按建议改写」（excerpt 仍在正文 → 可用）；
+    // 仍没有「应用/采纳/润色/替换正文/自动修」一键落库按钮
+    expect(within(dialog).getAllByRole('button', { name: '定位' })).toHaveLength(2);
+    expect(within(dialog).getAllByRole('button', { name: '按建议改写' })).toHaveLength(2);
+    expect(within(dialog).getAllByRole('button', { name: '定位' })[0]).toBeEnabled();
     expect(
-      within(dialog).getByText(/只给诊断，不改稿；是否采纳、怎么改由你决定。/u),
-    ).toBeInTheDocument();
-    // 无任何「应用/采纳/改写/润色/替换」按钮
-    expect(
-      within(dialog).queryByRole('button', { name: /应用|采纳|改写|润色|替换|自动修/u }),
+      within(dialog).queryByRole('button', { name: /应用|采纳|润色|替换正文|自动修/u }),
     ).not.toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/定位只选中原文；按建议改写会打开段落加工，仍要你确认替换。/u),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '重新检查' })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: '完成' })).toBeInTheDocument();
 
     // 关闭不写：提案/摘要/正文都不变
@@ -377,7 +386,7 @@ describe('M4-S2 · 编辑器 UI', () => {
     expect(
       (await harness.repository.listChapters(novel.id)).find((item) => item.id === target.id)!
         .content,
-    ).toBe('本章正文。');
+    ).toBe('他忽然想起很多年前的事。雪落了整夜，追兵在门外。');
     void ch1;
   });
 
@@ -389,6 +398,9 @@ describe('M4-S2 · 编辑器 UI', () => {
     const dialog = await openStyleSheet(user);
     await user.click(within(dialog).getByRole('button', { name: '检查文风' }));
     expect(await within(dialog).findByText('未发现明显文风漂移。')).toBeInTheDocument();
+    // 缺省（没有 issue）不显示定位/改写动作
+    expect(within(dialog).queryByRole('button', { name: '定位' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: '按建议改写' })).not.toBeInTheDocument();
   });
 
   it('第一章：无锚点提示「第一章或没有更早正文…只对照风格档案」', async () => {
@@ -450,5 +462,165 @@ describe('M4-S2 · 编辑器 UI', () => {
     expect(screen.getByRole('button', { name: '检查文风' })).toBeDisabled();
     // 无正文时没有可打开的面板
     expect(screen.queryByRole('dialog', { name: '检查文风' })).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------- M4.2 定位 / 按建议改写
+
+const CONTENT = '他忽然想起很多年前的事。雪落了整夜，追兵在门外。';
+const EXCERPT_1 = '他忽然想起很多年前的事。';
+
+async function openResult(content = CONTENT) {
+  await makeChapter('源头', '江雾'.repeat(220), 'done');
+  const target = await makeChapter('目标章', content);
+  const stub = stubStyleCheck();
+  const user = await renderEditor();
+  const dialog = await openStyleSheet(user);
+  await user.click(within(dialog).getByRole('button', { name: '检查文风' }));
+  expect(await within(dialog).findByText(CHECK_RESULT.summary)).toBeInTheDocument();
+  return { user, dialog, target, ...stub };
+}
+
+describe('M4.2 · 定位与按建议改写', () => {
+  it('定位：面板关闭、编辑器选区正好是 excerpt 区间、正文不变、无新请求', async () => {
+    const { user, dialog, fetchSpy } = await openResult();
+    const textarea = screen.getByLabelText('章节正文') as HTMLTextAreaElement;
+    const start = CONTENT.indexOf(EXCERPT_1);
+
+    await user.click(within(dialog).getAllByRole('button', { name: '定位' })[0]!);
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '检查文风' })).not.toBeInTheDocument(),
+    );
+
+    expect(textarea.selectionStart).toBe(start);
+    expect(textarea.selectionEnd).toBe(start + EXCERPT_1.length);
+    expect(textarea.value).toBe(CONTENT); // 只改选区，不改正文
+    expect(fetchSpy).toHaveBeenCalledTimes(1); // 不新增请求
+  });
+
+  it('按建议改写：打开段落加工，预填 rewrite + suggestion/basis；正文不变、无新请求', async () => {
+    const { user, dialog, fetchSpy } = await openResult();
+
+    await user.click(within(dialog).getAllByRole('button', { name: '按建议改写' })[0]!);
+    const reviseDialog = await screen.findByRole('dialog', { name: '加工这一段' });
+
+    // 预填：标题为加工面板；操作是「改写」（开始改写）；额外要求含 suggestion+basis
+    expect(within(reviseDialog).getByRole('button', { name: '开始改写' })).toBeInTheDocument();
+    const instruction = within(reviseDialog).getByLabelText(
+      '额外要求（可选）',
+    ) as HTMLTextAreaElement;
+    expect(instruction.value).toBe(
+      '按文风检查建议修改：把这段拉到现场动作里，别直接总结回忆。（依据：这句从现场动作切到总结性回忆，叙述距离比锚点明显拉远。）',
+    );
+    expect(within(reviseDialog).getByText(EXCERPT_1)).toBeInTheDocument(); // 选中内容仍是原句
+    const textarea = screen.getByLabelText('章节正文') as HTMLTextAreaElement;
+    expect(textarea.value).toBe(CONTENT); // 未点替换前正文不变
+    expect(fetchSpy).toHaveBeenCalledTimes(1); // 打开加工面板不发请求
+  });
+
+  it('段落加工点「替换原文」后才写入正文；无提案、无摘要', async () => {
+    const { user, dialog, target, fetchSpy } = await openResult();
+    await user.click(within(dialog).getAllByRole('button', { name: '按建议改写' })[0]!);
+    const reviseDialog = await screen.findByRole('dialog', { name: '加工这一段' });
+
+    await user.click(within(reviseDialog).getByRole('button', { name: '开始改写' }));
+    const replace = await within(reviseDialog).findByRole('button', { name: '替换原文' });
+    const textarea = screen.getByLabelText('章节正文') as HTMLTextAreaElement;
+    expect(textarea.value).toBe(CONTENT); // 生成结果未确认前不写
+
+    await user.click(replace);
+    await waitFor(() =>
+      expect((screen.getByLabelText('章节正文') as HTMLTextAreaElement).value).toBe(
+        CONTENT.replace(EXCERPT_1, '改写后的句子。'),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '加工这一段' })).not.toBeInTheDocument(),
+    );
+    expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(2); // 检查 1 次 + 改写 1 次
+    expect(await harness.repository.listProposals(novel.id)).toEqual([]);
+    expect(await harness.repository.listSummaries(novel.id)).toEqual([]);
+    const saved = (await harness.repository.listChapters(novel.id)).find(
+      (item) => item.id === target.id,
+    )!;
+    // 正文由编辑器防御性保存；此处只断言没有自动产生提案/摘要，正文最终以编辑器状态为准
+    expect(saved.id).toBe(target.id);
+  });
+
+  it('原文已被修改：两条动作禁用并提示「原文已被修改，找不到」', async () => {
+    const { user, dialog } = await openResult();
+    const textarea = screen.getByLabelText('章节正文') as HTMLTextAreaElement;
+    await user.clear(textarea);
+    await user.type(textarea, '完全不同的正文。');
+
+    await waitFor(() => {
+      const locateButtons = within(dialog).getAllByRole('button', { name: '定位' });
+      expect(locateButtons.every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+    });
+    expect(within(dialog).getAllByRole('button', { name: '按建议改写' })).toHaveLength(2);
+    expect(
+      (within(dialog).getAllByRole('button', { name: '按建议改写' }) as HTMLButtonElement[]).every(
+        (button) => button.disabled,
+      ),
+    ).toBe(true);
+    expect(within(dialog).getAllByText('原文已被修改，找不到')).toHaveLength(2);
+  });
+
+  it('关闭重开保留本次诊断；「重新检查」不自动调用，点了才再请求', async () => {
+    const { user, dialog, fetchSpy } = await openResult();
+    await user.click(within(dialog).getByRole('button', { name: '完成' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '检查文风' })).not.toBeInTheDocument(),
+    );
+
+    const reopened = await openStyleSheet(user);
+    expect(within(reopened).getByText(CHECK_RESULT.summary)).toBeInTheDocument();
+    expect(within(reopened).getAllByRole('button', { name: '定位' })).toHaveLength(2);
+    expect(fetchSpy).toHaveBeenCalledTimes(1); // 重开不请求
+
+    await user.click(within(reopened).getByRole('button', { name: '重新检查' }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    expect(await within(reopened).findByText(CHECK_RESULT.summary)).toBeInTheDocument();
+  });
+
+  it('换章后重置：另一章打开文风面板是 idle，不带上一章诊断', async () => {
+    const { user, dialog, fetchSpy } = await openResult();
+    await user.click(within(dialog).getByRole('button', { name: '完成' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '检查文风' })).not.toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole('button', { name: '返回' }));
+    await user.click(await screen.findByRole('button', { name: '继续写第 1 章' }));
+    await screen.findByLabelText('章节正文');
+    const fresh = await openStyleSheet(user);
+
+    expect(within(fresh).queryByText(CHECK_RESULT.summary)).not.toBeInTheDocument();
+    expect(within(fresh).queryAllByRole('button', { name: '定位' })).toHaveLength(0);
+    expect(within(fresh).getByText(/本章约 \d+ 字，检查一次调用。/u)).toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('M4.2 · locateQuote（原句定位）', () => {
+  it('精确命中返回区间；多次出现取第一次', () => {
+    const content = `开头。${EXCERPT_1}中间。${EXCERPT_1}`;
+    const range = locateQuote(content, EXCERPT_1)!;
+    expect(content.slice(range.start, range.end)).toBe(EXCERPT_1);
+    expect(range.start).toBe(content.indexOf(EXCERPT_1));
+  });
+
+  it('模型把跨行原句抄成一行时忽略空白仍能定位，区间不含首尾多余空白', () => {
+    const content = '雪落了整夜，\n\n  追兵在门外。';
+    const range = locateQuote(content, '雪落了整夜，追兵在门外。')!;
+    expect(range).not.toBeNull();
+    expect(content.slice(range.start, range.end).replace(/[\s\u3000]/gu, '')).toBe(
+      '雪落了整夜，追兵在门外。',
+    );
+  });
+
+  it('原文已被改掉/quote 为空 → null', () => {
+    expect(locateQuote(CONTENT, '不存在的句子。')).toBeNull();
+    expect(locateQuote(CONTENT, '   ')).toBeNull();
   });
 });
