@@ -329,6 +329,52 @@ describe('整章生成', () => {
     });
   });
 
+  it('空结果守卫：空流不提供替换/采用按钮，已有正文保持不变', async () => {
+    const existing = await harness.repository.createChapter(novel.id, {
+      title: '第1章 雪夜',
+      content: '已经写好的开头。',
+      outlineNodeId: chapterNode.id,
+    });
+    stubStream([]);
+    const user = await enterEditor();
+    expect(await screen.findByLabelText('章节正文')).toHaveValue('已经写好的开头。');
+
+    await user.click(screen.getByRole('button', { name: '生成本章' }));
+    await screen.findByText('本次注入');
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+
+    expect(await screen.findByText('模型没有返回正文，请重试。')).toBeInTheDocument();
+    expect(screen.queryByLabelText('生成结果（可直接修改）')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /替换正文|采用为正文/u })).not.toBeInTheDocument();
+
+    await waitFor(async () => {
+      const chapters = await harness.repository.listChapters(novel.id);
+      expect(chapters.find((item) => item.id === existing.id)?.content).toBe('已经写好的开头。');
+    });
+    expect(screen.getByLabelText('章节正文')).toHaveValue('已经写好的开头。');
+  });
+
+  it('采用空文本的防御守卫：预览被清空后采用也不会清空正文', async () => {
+    const user = await enterEditor();
+    await user.type(screen.getByLabelText('章节正文'), '已经写好的开头。');
+    await waitFor(() => expect(screen.getByText('已保存')).toBeInTheDocument(), { timeout: 3000 });
+
+    stubStream(['新生成的段落。']);
+    await user.click(screen.getByRole('button', { name: '生成本章' }));
+    await screen.findByText('本次注入');
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+    const preview = await screen.findByLabelText('生成结果（可直接修改）');
+    await user.clear(preview);
+    await user.click(screen.getByRole('button', { name: '替换正文' }));
+
+    // 空内容不写库：正文保持原值，不会被「采用」清空
+    await waitFor(async () => {
+      const chapters = await harness.repository.listChapters(novel.id);
+      expect(chapters[0]?.content).toBe('已经写好的开头。');
+    });
+    expect(screen.getByLabelText('章节正文')).toHaveValue('已经写好的开头。');
+  });
+
   it('请求按正文任务关闭思维链，并把稳定前缀放在 system', async () => {
     await harness.repository.createEntry(novel.id, {
       categoryId: charCategory.id,

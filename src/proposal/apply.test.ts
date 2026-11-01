@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppDatabase } from '@/data/dexie/db';
 import { DexieNovelRepository } from '@/data/dexie/DexieNovelRepository';
 import { emptyDelta, type Novel, type Proposal, type SideStory } from '@/domain/schema';
@@ -955,5 +955,85 @@ describe('推演沉淀（scenarioOutline:create）', () => {
     await expect(
       applyProposal(repo, { ...proposal, action: 'replace', targetId: 'x' }),
     ).rejects.toThrow('沉淀提案只支持新建');
+  });
+});
+
+describe('原子采用与状态一致（applyProposalAtomically）', () => {
+  /** 一条待确认的「新建人物」提案：采用后应产生一个知识条目 */
+  async function atomicProposal(title: string): Promise<Proposal> {
+    return buildCreateProposal({
+      novelId: novel.id,
+      origin: 'generate',
+      target: 'knowledgeEntry',
+      label: `人物 · ${title}`,
+      specs: await characterSpecs(),
+      payload: { categoryId: characterCategoryId, title },
+    });
+  }
+
+  it('状态写入失败时业务写入一起回滚，重试只产生一份条目', async () => {
+    const proposal = await atomicProposal('状态失败');
+    await repo.createProposals([proposal]);
+    const spy = vi.spyOn(repo, 'updateProposal').mockRejectedValueOnce(new Error('状态写入失败'));
+
+    const first = await acceptProposals(repo, [proposal]);
+    expect(first.failed).toHaveLength(1);
+    // 业务写入必须回滚：不能出现「条目已建、提案还待确认」
+    expect(await repo.listEntries(novel.id)).toHaveLength(0);
+    expect((await repo.listProposals(novel.id))[0]!.status).toBe('pending');
+
+    const second = await acceptProposals(repo, [proposal]);
+    expect(second.accepted).toEqual([proposal.id]);
+    expect(await repo.listEntries(novel.id)).toHaveLength(1);
+    spy.mockRestore();
+  });
+
+  it('并发采用同一提案只产生一份业务结果', async () => {
+    const proposal = await atomicProposal('并发采用');
+    await repo.createProposals([proposal]);
+
+    const [a, b] = await Promise.all([
+      acceptProposals(repo, [proposal]),
+      acceptProposals(repo, [proposal]),
+    ]);
+
+    expect(a.failed).toHaveLength(0);
+    expect(b.failed).toHaveLength(0);
+    expect(await repo.listEntries(novel.id)).toHaveLength(1);
+  });
+
+  it('已忽略的提案不能再被采用', async () => {
+    const proposal = await atomicProposal('已忽略');
+    await repo.createProposals([proposal]);
+    await rejectProposals(repo, [proposal.id]);
+
+    const result = await acceptProposals(repo, [proposal]);
+    expect(result.failed.map((item) => item.proposalId)).toEqual([proposal.id]);
+    expect(await repo.listEntries(novel.id)).toHaveLength(0);
+    expect((await repo.listProposals(novel.id))[0]!.status).toBe('rejected');
+  });
+
+  it('已采用的提案不会被后续忽略改回 rejected', async () => {
+    const proposal = await atomicProposal('已采用');
+    await repo.createProposals([proposal]);
+    await acceptProposals(repo, [proposal]);
+
+    await rejectProposals(repo, [proposal.id]);
+
+    expect((await repo.listProposals(novel.id))[0]!.status).toBe('accepted');
+  });
+
+  it('确认界面上的行内修改会随原子提交一起落库', async () => {
+    const proposal = await atomicProposal('原始标题');
+    await repo.createProposals([proposal]);
+    // ProposalInbox 会把行内编辑后的 payload 一并传进来
+    const edited: Proposal = {
+      ...proposal,
+      payload: { ...(proposal.payload as Record<string, unknown>), title: '行内改后的标题' },
+    };
+
+    await acceptProposals(repo, [edited]);
+
+    expect((await repo.listEntries(novel.id))[0]!.title).toBe('行内改后的标题');
   });
 });

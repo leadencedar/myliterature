@@ -339,6 +339,20 @@ export interface NovelRepository {
   createProposals(items: Proposal[]): Promise<void>;
   updateProposal(id: string, patch: Partial<Proposal>): Promise<Proposal>;
   deleteProposal(id: string): Promise<void>;
+  /**
+   * 单条提案的原子提交：事务内复核数据库里的最新状态 → 执行 `apply` → 标记 accepted。
+   *
+   * 之所以由仓储提供事务边界：一次采用会跨多张表写入，若业务写入与状态更新分两次提交，
+   * 状态更新失败时业务结果已经落库，重试就会重复执行（重复建条目、重复追加大纲等）。
+   * `apply` 收到调用方准备提交的提案对象（含用户在确认界面的行内修改），仓储只负责
+   * 事务与状态一致性：已 accepted 的提案幂等跳过，已 rejected 的拒绝再采用。
+   */
+  applyProposalAtomically(
+    proposal: Proposal,
+    apply: (proposal: Proposal) => Promise<void>,
+  ): Promise<void>;
+  /** 忽略单条提案：仅当仍待确认时标记 rejected，避免并发下覆盖已经采用的结果 */
+  rejectProposalAtomically(proposalId: string): Promise<void>;
 
   // ------------------------------------------------ 写作计划
   getPlan(novelId: string): Promise<WritingPlan | undefined>;

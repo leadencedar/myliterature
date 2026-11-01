@@ -472,6 +472,9 @@ export function ChapterEditorScreen({
     mode: 'replace' | 'append',
     meta?: { incomplete?: 'truncated' | 'aborted' },
   ) {
+    // 空结果守卫：生成面板已经拦住空流，这里再挡一层 —— 任何调用方都不该拿
+    // 空正文（replace 的 next、append 的尾巴）覆盖已有正文，否则会清空章节
+    if (!text.trim()) return;
     const next = mode === 'append' ? `${content.trimEnd()}\n\n${text.trim()}` : text.trim();
     // 与确认文案「采用后本章仍是草稿」一致：已完成章节不能留半章当定稿。
     // 状态与正文放进同一次写库；摘要等作者重新标完成时再生成，这里不自动触发

@@ -30,7 +30,13 @@ type Phase =
   | { kind: 'form' }
   | { kind: 'streaming'; text: string }
   /** incomplete：生成没有完整结束（撞上限被截断 / 用户中止），采用前要二次确认 */
-  | { kind: 'done'; text: string; incomplete?: 'truncated' | 'aborted' }
+  | {
+      kind: 'done';
+      text: string;
+      incomplete?: 'truncated' | 'aborted';
+      /** 续写没有返回内容时的可见提示：原稿保留，可重试或直接采用 */
+      notice?: string;
+    }
   | { kind: 'error'; message: string; detail?: string };
 
 /** 服务端明确拒绝 max_tokens 参数时才允许去掉它重试，别把别的 400 也吞成静默重试 */
@@ -246,11 +252,18 @@ export function GenerateChapterSheet({
         if (!isMaxTokensRejected(cause)) throw cause;
         result = await startStream(false);
       }
+      // 空结果守卫：服务端先发 error 帧、模型空返回、max_tokens 被拒重试后仍为空，
+      // 都会走到这里。空正文不能进入 done 态 —— 否则「替换正文」会把已有正文清成空串
+      const text = result.content || streamed;
+      if (!text.trim()) {
+        setPhase({ kind: 'error', message: '模型没有返回正文，请重试。' });
+        return;
+      }
       // finishReason 为 null 表示服务商没回传：视为未知，不判截断、不报错
       const incomplete = result.finishReason === 'length' ? 'truncated' : undefined;
       setPhase({
         kind: 'done',
-        text: result.content || streamed,
+        text,
         ...(incomplete ? { incomplete } : {}),
       });
     } catch (cause) {
@@ -317,7 +330,18 @@ export function GenerateChapterSheet({
           },
         },
       );
-      const next = appendGenerated(base, result.content || streamed);
+      const addition = result.content || streamed;
+      if (!addition.trim()) {
+        // 空续写不能把已有生成稿覆盖成空：保留原稿，提示可以重试或直接采用
+        setPhase({
+          kind: 'done',
+          text: base,
+          ...(previousIncomplete ? { incomplete: previousIncomplete } : {}),
+          notice: '续写没有返回新内容，已保留原生成稿。可以再试一次，或直接采用现有内容。',
+        });
+        return;
+      }
+      const next = appendGenerated(base, addition);
       // 续写被截断仍算未完成：作者要能继续补，而不是被当成完整的一章
       const incomplete = result.finishReason === 'length' ? 'truncated' : undefined;
       setPhase({ kind: 'done', text: next, ...(incomplete ? { incomplete } : {}) });
@@ -556,6 +580,13 @@ export function GenerateChapterSheet({
                     ? '生成被截断，内容不完整。可以继续补写未落地场景，或重新生成；采用只会保存已生成的部分。'
                     : '生成已中断，内容不完整。可以继续补写未落地场景，或重新生成。'}
                 </p>
+              </div>
+            ) : null}
+
+            {/* 续写没有返回内容：原稿还在，但必须让作者看见这次补写失败 */}
+            {phase.kind === 'done' && phase.notice ? (
+              <div role="alert" className="rounded-xl bg-seal-soft px-3 py-2.5">
+                <p className="text-sm text-seal">{phase.notice}</p>
               </div>
             ) : null}
 

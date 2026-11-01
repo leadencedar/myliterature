@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import type { NovelRepository, OutlineTreeInputNode } from '@/data/NovelRepository';
-import { now } from '@/domain/primitives';
 import { RubricSchema, type Proposal } from '@/domain/schema';
 import {
   ScenarioOutlinePayloadSchema,
@@ -273,6 +272,10 @@ export interface AcceptResult {
  *
  * 逐条处理而非整体事务：一条失败（比如目标条目已被手动删除）不应该
  * 让其余十几条一起回滚。失败的提案保持 pending，用户可以单独处理或忽略。
+ *
+ * 但单条提案内部必须原子：读状态、业务写入、标记 accepted 由仓储放在同一个
+ * 事务里（applyProposalAtomically），状态写入失败时业务写入一起回滚，
+ * 重试或并发采用都不会产生第二份业务结果。
  */
 export async function acceptProposals(
   repo: NovelRepository,
@@ -282,8 +285,8 @@ export async function acceptProposals(
 
   for (const proposal of proposals) {
     try {
-      await applyProposal(repo, proposal);
-      await repo.updateProposal(proposal.id, { status: 'accepted', decidedAt: now() });
+      // apply 拿到的是调用方准备提交的提案（含用户在确认界面的行内修改）
+      await repo.applyProposalAtomically(proposal, (current) => applyProposal(repo, current));
       result.accepted.push(proposal.id);
     } catch (cause) {
       result.failed.push({
@@ -297,9 +300,12 @@ export async function acceptProposals(
   return result;
 }
 
-/** 忽略提案：保留记录而不删除，便于回溯「当时拒绝了什么」 */
+/**
+ * 忽略提案：保留记录而不删除，便于回溯「当时拒绝了什么」。
+ * 只对仍待确认的提案生效 —— 并发场景下「忽略」不能覆盖已经采用的提案。
+ */
 export async function rejectProposals(repo: NovelRepository, proposalIds: string[]): Promise<void> {
   for (const id of proposalIds) {
-    await repo.updateProposal(id, { status: 'rejected', decidedAt: now() });
+    await repo.rejectProposalAtomically(id);
   }
 }

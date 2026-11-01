@@ -72,14 +72,14 @@ function stubStream(deltas: string[], finishReason?: string) {
   return fetchSpy;
 }
 
-function renderSheet(overrides: Partial<SheetContext> = {}) {
+function renderSheet(overrides: Partial<SheetContext> = {}, existingContent = '') {
   const onAccept = vi.fn();
   const onClose = vi.fn();
   harness.renderUI(
     <GenerateChapterSheet
       open
       context={{ ...context, ...overrides }}
-      existingContent=""
+      existingContent={existingContent}
       onClose={onClose}
       onAccept={onAccept}
     />,
@@ -300,6 +300,74 @@ describe('400 max_tokens 兼容回退', () => {
   });
 });
 
+describe('空结果守卫（流式没有正文）', () => {
+  const EMPTY_RESULT_MESSAGE = '模型没有返回正文，请重试。';
+
+  it('已有正文的章节收到只有 [DONE] 的空流：明确提示未返回正文，不出现替换/采用按钮，库中正文不变', async () => {
+    const [chapter] = await harness.repository.listChapters(context.novel.id);
+    const existing = await harness.repository.updateChapter(chapter!.id, {
+      content: '原有的正文。',
+    });
+    stubStream([]);
+    const { user, onAccept } = renderSheet({ chapters: [existing] }, existing.content);
+
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+
+    expect(await screen.findByText(EMPTY_RESULT_MESSAGE)).toBeInTheDocument();
+    // 空结果不能进入可采用的 done 态：预览与替换/追加按钮都不该出现
+    expect(screen.queryByLabelText('生成结果（可直接修改）')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /替换正文|采用为正文|追加到正文末尾/u }),
+    ).not.toBeInTheDocument();
+    expect(onAccept).not.toHaveBeenCalled();
+    // 保留重试入口：错误提示就在表单里，可直接再点「开始生成」
+    expect(screen.getByRole('button', { name: '开始生成' })).toBeInTheDocument();
+
+    const chapters = await harness.repository.listChapters(context.novel.id);
+    expect(chapters.find((item) => item.id === existing.id)?.content).toBe('原有的正文。');
+  });
+
+  it('只有纯空白的 delta 也算空结果，不进入可采用状态', async () => {
+    stubStream(['\n  ']);
+    const { user } = renderSheet();
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+
+    expect(await screen.findByText(EMPTY_RESULT_MESSAGE)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /替换正文|采用为正文/u })).not.toBeInTheDocument();
+
+    // 错误态可以重试：换成正常响应后重试能进入预览
+    stubStream(['重试后的正文']);
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+    expect(await screen.findByLabelText('生成结果（可直接修改）')).toHaveValue('重试后的正文');
+  });
+
+  it('max_tokens 被拒后重试仍为空：同样按空结果处理', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchSpy = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      if (bodies.length === 1) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: { message: 'Invalid max_tokens value' } }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+      }
+      return Promise.resolve(sseResponse(textDeltaEvents([])));
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const { user, onAccept } = renderSheet();
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+
+    expect(await screen.findByText(EMPTY_RESULT_MESSAGE)).toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(bodies[1]).not.toHaveProperty('max_tokens');
+    expect(screen.queryByRole('button', { name: /替换正文|采用为正文/u })).not.toBeInTheDocument();
+    expect(onAccept).not.toHaveBeenCalled();
+  });
+});
+
 describe('生成差额与手动继续补写（S4）', () => {
   /** 3000 个汉字 = countWords 3000，相对 6000 目标正好一半（<85%） */
   const HALF = '字'.repeat(3000);
@@ -376,6 +444,23 @@ describe('生成差额与手动继续补写（S4）', () => {
     );
     // 按剩余 3000 字推导：ceil(3000×1.8)+800=6200，而不是整章目标推导的 8192
     expect(body.max_tokens).toBe(6200);
+  });
+
+  it('续写返回空内容时保留原生成稿并给出可见提示', async () => {
+    stubSequence([{ deltas: ['短稿。'] }, { deltas: [] }]);
+    const { user, onAccept } = renderSheet();
+    await generate(user);
+
+    await user.click(screen.getByRole('button', { name: '继续补写' }));
+
+    expect(await screen.findByText(/续写没有返回新内容/u)).toBeInTheDocument();
+    // 不得清空已有生成稿：预览仍是原稿，且不进入错误态
+    expect(screen.getByLabelText('生成结果（可直接修改）')).toHaveValue('短稿。');
+    expect(screen.queryByText(/模型没有返回正文/u)).not.toBeInTheDocument();
+    // 仍可继续补写，也可以直接采用原稿
+    expect(screen.getByRole('button', { name: '继续补写' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '采用为正文' })).toBeInTheDocument();
+    expect(onAccept).not.toHaveBeenCalled();
   });
 
   it('完整但略低于目标（90%）：标题「接近目标」，不弹补写块', async () => {

@@ -636,51 +636,60 @@ export class DexieNovelRepository implements NovelRepository {
     input: Partial<Chapter> & { index?: number },
   ): Promise<Chapter> {
     const sideStoryId = input.sideStoryId ?? null;
-    if (sideStoryId !== null) {
-      const story = await this.db.sideStories.get(sideStoryId);
-      if (!story || story.novelId !== novelId) throw new Error('外传不存在');
-      // 外传独立于主线的大纲；关联上去会让大纲进度把外传算进主线
-      if ((input.outlineNodeId ?? null) !== null) throw new Error('外传章节不能关联大纲节点');
-    }
-    // 编号按线各自从 1 起：主线与每部外传互不影响
-    const existing = chaptersOfTrack(await this.listChapters(novelId), sideStoryId);
-    const nextIndex =
-      input.index ?? (existing.length === 0 ? 1 : Math.max(...existing.map((c) => c.index)) + 1);
-    const content = input.content ?? '';
-    const timestamp = now();
-    const chapter = ChapterSchema.parse({
-      ...stripProtected(input),
-      id: newId(),
-      novelId,
-      index: nextIndex,
-      content,
-      wordCount: countWords(content),
-      createdAt: timestamp,
-      updatedAt: timestamp,
+    // 外传校验、编号分配与插入必须在同一事务里：并发新建同一线的章节时，
+    // 「读现有章号 → 算下一号 → 插入」如果不原子，两个请求会拿到同一个章号。
+    // 外传校验要读 sideStories，编号要读 chapters，两表都进事务。
+    return this.db.transaction('rw', [this.db.chapters, this.db.sideStories], async () => {
+      if (sideStoryId !== null) {
+        const story = await this.db.sideStories.get(sideStoryId);
+        if (!story || story.novelId !== novelId) throw new Error('外传不存在');
+        // 外传独立于主线的大纲；关联上去会让大纲进度把外传算进主线
+        if ((input.outlineNodeId ?? null) !== null) throw new Error('外传章节不能关联大纲节点');
+      }
+      // 编号按线各自从 1 起：主线与每部外传互不影响
+      const existing = chaptersOfTrack(await this.listChapters(novelId), sideStoryId);
+      const nextIndex =
+        input.index ?? (existing.length === 0 ? 1 : Math.max(...existing.map((c) => c.index)) + 1);
+      const content = input.content ?? '';
+      const timestamp = now();
+      const chapter = ChapterSchema.parse({
+        ...stripProtected(input),
+        id: newId(),
+        novelId,
+        index: nextIndex,
+        content,
+        wordCount: countWords(content),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      await this.db.chapters.add(chapter);
+      return chapter;
     });
-    await this.db.chapters.add(chapter);
-    return chapter;
   }
 
   async updateChapter(id: string, patch: Partial<Chapter>): Promise<Chapter> {
-    const current = await this.db.chapters.get(id);
-    if (!current) throw new Error(`章节不存在：${id}`);
-    const safePatch = stripProtected(patch);
-    // 跨线移动不支持：静默剥掉而不是抛错，调用方常传 `{ ...chapter, content }` 整对象，
-    // 带的就是原值；剥掉也保证编号与摘要链不会悄悄错乱
-    delete safePatch.sideStoryId;
-    if ((current.sideStoryId ?? null) !== null && (safePatch.outlineNodeId ?? null) !== null) {
-      throw new Error('外传章节不能关联大纲节点');
-    }
-    const merged = { ...current, ...safePatch };
-    const next = ChapterSchema.parse({
-      ...merged,
-      // 字数始终由正文推导，不接受外部传入，避免两者不一致
-      wordCount: countWords(merged.content),
-      updatedAt: now(),
+    // 读旧对象 → 合并 patch → 整行 put 必须在同一事务里：两个并发请求
+    // （防抖保存 / 快捷键 / AI 采用）若同时读到同一个旧值，后写的会覆盖先写的字段。
+    return this.db.transaction('rw', this.db.chapters, async () => {
+      const current = await this.db.chapters.get(id);
+      if (!current) throw new Error(`章节不存在：${id}`);
+      const safePatch = stripProtected(patch);
+      // 跨线移动不支持：静默剥掉而不是抛错，调用方常传 `{ ...chapter, content }` 整对象，
+      // 带的就是原值；剥掉也保证编号与摘要链不会悄悄错乱
+      delete safePatch.sideStoryId;
+      if ((current.sideStoryId ?? null) !== null && (safePatch.outlineNodeId ?? null) !== null) {
+        throw new Error('外传章节不能关联大纲节点');
+      }
+      const merged = { ...current, ...safePatch };
+      const next = ChapterSchema.parse({
+        ...merged,
+        // 字数始终由正文推导，不接受外部传入，避免两者不一致
+        wordCount: countWords(merged.content),
+        updatedAt: now(),
+      });
+      await this.db.chapters.put(next);
+      return next;
     });
-    await this.db.chapters.put(next);
-    return next;
   }
 
   async deleteChapter(id: string): Promise<void> {
@@ -1569,6 +1578,39 @@ export class DexieNovelRepository implements NovelRepository {
 
   async deleteProposal(id: string): Promise<void> {
     await this.db.proposals.delete(id);
+  }
+
+  /**
+   * 单条提案的原子提交。
+   *
+   * 外层事务用 `db.tables` 覆盖全部表：一次采用可能写条目、大纲、章节、摘要等任意表，
+   * 而各仓储方法内部还可能再开子事务；Dexie 只有在表集是父集子集时才会复用父事务，
+   * 所以这里先按「完整性优先」锁全表。后续若要收窄，需按提案分支逐一验证。
+   */
+  async applyProposalAtomically(
+    proposal: Proposal,
+    apply: (proposal: Proposal) => Promise<void>,
+  ): Promise<void> {
+    await this.db.transaction('rw', this.db.tables, async () => {
+      const current = await this.db.proposals.get(proposal.id);
+      if (!current) throw new Error(`Proposal 不存在：${proposal.id}`);
+      // 幂等：并发的第二个采用请求（或重复点击）不能把业务再执行一遍
+      if (current.status === 'accepted') return;
+      if (current.status !== 'pending') throw new Error('提案已被忽略，不能再采用');
+      // 业务写入用调用方带来的提案对象：用户确认界面的行内修改在 payload 里，
+      // 不能拿数据库旧 payload 覆盖掉它
+      await apply(proposal);
+      await this.updateProposal(proposal.id, { status: 'accepted', decidedAt: now() });
+    });
+  }
+
+  async rejectProposalAtomically(proposalId: string): Promise<void> {
+    await this.db.transaction('rw', this.db.proposals, async () => {
+      const current = await this.db.proposals.get(proposalId);
+      // 已处理过的提案保持原状态：并发「采用」和「忽略」不能互相覆盖
+      if (!current || current.status !== 'pending') return;
+      await this.updateProposal(proposalId, { status: 'rejected', decidedAt: now() });
+    });
   }
 
   // ================================================================ 写作计划
