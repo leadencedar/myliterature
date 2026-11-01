@@ -13,11 +13,12 @@
 - 报告：`ux/device-check/report.md`；截图 `ux/device-check/device-*.png`。
 - 结论：布局/交互形态在两种视口下通过；**物理真机仍需人工**（清单见报告 §7）。
 
-### 2. 真实模型抽检套件（Ready，待 Key）
+### 2. 真实模型抽检套件（已完成多轮真实调用）
 
 - 文件：`src/test/live/liveModelCheck.test.ts`；脚本：`npm run test:live`；说明：`.agents/tasks/real-device-live-check/README.md`。
-- 3 次真实调用：A 归档提取（schema/条目/龙套候选/伏笔）、B 前沿 3 章大纲（场景/冲突/钩子/收束）、C 整章 1200 字（字数/截断/耗时）。
-- 无 Key 时：1 条可见提示 + 3 条 skip，exit 0，不写报告；常规测试不受影响（2454 passed / 4 skipped）。
+- 当前 4 次真实调用：A 归档提取、B 前沿 3 章大纲、C 整章生成、D 文风检查。
+- 无 Key 时：可见提示 + skip，exit 0，不写报告；常规测试不受影响。
+- 最近一轮（2026-11-01，审计修复合并后）：4/4 通过、`attempts=1`，无回归；详见 `live-result.md` 复测 6。
 - 报告：`analysis/live-model-report.json`（不含 Key）。
 
 ## 本地 App 启动状态
