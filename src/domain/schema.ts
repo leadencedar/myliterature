@@ -735,6 +735,13 @@ export const ProposalSchema = z.object({
   label: z.string().default(''),
   /** 待落库的实体数据（结构由 target 决定） */
   payload: z.unknown(),
+  /**
+   * 生成时的原始实体快照（仅 merge / replace）。
+   *
+   * 采用时做三方合并：区分「提案改的字段」与「作者在等待确认期间手动改的字段」，
+   * 避免旧 payload 把作者后来的修改回退掉。旧提案没有该字段，采用时从 diff.before 重建。
+   */
+  base: z.unknown().optional(),
   diff: z.array(FieldDiffSchema).default([]),
   /** 溯源，如「第 3 章」 */
   sourceRef: z.string().default(''),

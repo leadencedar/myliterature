@@ -49,6 +49,8 @@ export function buildMergeProposal(
     action: 'merge',
     targetId: params.targetId,
     payload: merged,
+    // 生成时的完整快照：采用时与当前值做三方合并，避免回退作者等待期间的修改
+    base: params.current,
     diff: computeDiff(params.specs, merged, params.current),
   });
 }
@@ -62,6 +64,8 @@ export function buildReplaceProposal(
     action: 'replace',
     targetId: params.targetId,
     payload: params.payload,
+    // 生成时的完整快照：采用时与当前值做三方合并
+    base: params.current,
     diff: computeDiff(params.specs, params.payload, params.current),
   });
 }
@@ -71,6 +75,8 @@ function finalize(
     action: Proposal['action'];
     targetId: string | null;
     payload: unknown;
+    /** merge / replace 的生成时快照；create 没有 */
+    base?: unknown;
     diff: Proposal['diff'];
   },
 ): Proposal {
@@ -85,6 +91,7 @@ function finalize(
     targetId: params.targetId,
     label: params.label,
     payload: params.payload,
+    ...(params.base !== undefined ? { base: params.base } : {}),
     diff: params.diff,
     sourceRef: params.sourceRef ?? '',
     status: 'pending',
