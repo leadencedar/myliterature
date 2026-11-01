@@ -31,6 +31,20 @@ const SettingsPage = lazy(() =>
 );
 
 /**
+ * UI v2 阶段 1 的工作台预览页。
+ *
+ * 仅在开发环境注册：生产构建里 `import.meta.env.DEV` 为 false，
+ * 这个三元表达式和它引用的动态 import 会被摇掉；预览页也不是产品入口。
+ */
+const WorkbenchPreview = import.meta.env.DEV
+  ? lazy(() =>
+      import('@/features/writing/workbench/WorkbenchPreview').then((m) => ({
+        default: m.WorkbenchPreview,
+      })),
+    )
+  : null;
+
+/**
  * 应用外壳：路由表 + 常驻主导航。
  *
  * 不把 novelId 放进 URL，而是用「当前作品」这一全局状态驱动
@@ -66,6 +80,8 @@ export function AppShell() {
             <Route path="/write/scenario/:scenarioId" element={<ScenarioPage />} />
             <Route path="/plan" element={<PlanPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            {/* UI v2 阶段 1 的令牌/空壳预览：只存在于开发环境 */}
+            {WorkbenchPreview ? <Route path="/__workbench" element={<WorkbenchPreview />} /> : null}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
