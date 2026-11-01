@@ -912,6 +912,53 @@ describe('章节', () => {
 
     expect((await repo.listChapters(novel.id)).map((c) => c.title)).toEqual(['一', '二', '三']);
   });
+
+  it('并发更新不同字段时两项修改都保留（读改写在同一事务里）', async () => {
+    const novel = await seedNovel();
+    const chapter = await repo.createChapter(novel.id, { title: '旧标题', content: '旧正文' });
+
+    await Promise.all([
+      repo.updateChapter(chapter.id, { title: '新标题' }),
+      repo.updateChapter(chapter.id, { content: '新正文' }),
+    ]);
+
+    expect(await repo.getChapter(chapter.id)).toMatchObject({
+      title: '新标题',
+      content: '新正文',
+    });
+  });
+
+  it('并发新建章节不会拿到重复章号（编号分配在事务内）', async () => {
+    const novel = await seedNovel();
+
+    const created = await Promise.all([
+      repo.createChapter(novel.id, { title: '甲' }),
+      repo.createChapter(novel.id, { title: '乙' }),
+    ]);
+
+    expect(created.map((chapter) => chapter.index).sort((a, b) => a - b)).toEqual([1, 2]);
+    expect((await repo.listChapters(novel.id)).map((chapter) => chapter.index)).toEqual([1, 2]);
+  });
+
+  it('主线与每部外传各自编号；并发补写同一外传时章号仍连续', async () => {
+    const novel = await seedNovel();
+    const story = await repo.createSideStory(novel.id, { title: '外传一' });
+
+    const [mainFirst, sideFirst] = await Promise.all([
+      repo.createChapter(novel.id, {}),
+      repo.createChapter(novel.id, { sideStoryId: story.id }),
+    ]);
+    expect(mainFirst.index).toBe(1);
+    expect(sideFirst.index).toBe(1);
+
+    const sideRest = await Promise.all([
+      repo.createChapter(novel.id, { sideStoryId: story.id }),
+      repo.createChapter(novel.id, { sideStoryId: story.id }),
+    ]);
+    expect(sideRest.map((chapter) => chapter.index).sort((a, b) => a - b)).toEqual([2, 3]);
+    // 主线编号不受外传影响
+    expect((await repo.listChapters(novel.id)).filter((c) => !c.sideStoryId)).toHaveLength(1);
+  });
 });
 
 describe('外传', () => {

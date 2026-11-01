@@ -24,6 +24,18 @@ export type LlmErrorKind =
   | 'aborted';
 
 /**
+ * 流式生成中断前已经产出的内容。
+ *
+ * 服务端错误 / 连接中断时，客户端手里可能已经有一段可用正文。把它挂在错误上
+ * 而不是直接丢掉：生成面板可以保留这段内容、标记未完成，让作者决定继续补写
+ * 还是明确采用部分稿。只抛一个错误会连同已生成的正文一起丢失。
+ */
+export interface LlmPartial {
+  content: string;
+  reasoning: string;
+}
+
+/**
  * 统一的 LLM 错误类型。
  * 分类的意义在于 UI 能给出可操作的提示：余额不足要引导充值，
  * 限流要提示稍后重试，解析失败则是提示词问题而非用户问题。
@@ -32,13 +44,20 @@ export class LlmError extends Error {
   readonly kind: LlmErrorKind;
   readonly status?: number;
   readonly detail?: string;
+  /** 流式生成中断前已经产出的内容；非流式或还没有正文时为 undefined */
+  readonly partial?: LlmPartial;
 
-  constructor(kind: LlmErrorKind, message: string, options?: { status?: number; detail?: string }) {
+  constructor(
+    kind: LlmErrorKind,
+    message: string,
+    options?: { status?: number; detail?: string; partial?: LlmPartial },
+  ) {
     super(message);
     this.name = 'LlmError';
     this.kind = kind;
     if (options?.status !== undefined) this.status = options.status;
     if (options?.detail !== undefined) this.detail = options.detail;
+    if (options?.partial !== undefined) this.partial = options.partial;
   }
 }
 

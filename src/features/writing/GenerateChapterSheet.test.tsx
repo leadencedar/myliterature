@@ -72,14 +72,14 @@ function stubStream(deltas: string[], finishReason?: string) {
   return fetchSpy;
 }
 
-function renderSheet(overrides: Partial<SheetContext> = {}) {
+function renderSheet(overrides: Partial<SheetContext> = {}, existingContent = '') {
   const onAccept = vi.fn();
   const onClose = vi.fn();
   harness.renderUI(
     <GenerateChapterSheet
       open
       context={{ ...context, ...overrides }}
-      existingContent=""
+      existingContent={existingContent}
       onClose={onClose}
       onAccept={onAccept}
     />,
@@ -300,6 +300,74 @@ describe('400 max_tokens 兼容回退', () => {
   });
 });
 
+describe('空结果守卫（流式没有正文）', () => {
+  const EMPTY_RESULT_MESSAGE = '模型没有返回正文，请重试。';
+
+  it('已有正文的章节收到只有 [DONE] 的空流：明确提示未返回正文，不出现替换/采用按钮，库中正文不变', async () => {
+    const [chapter] = await harness.repository.listChapters(context.novel.id);
+    const existing = await harness.repository.updateChapter(chapter!.id, {
+      content: '原有的正文。',
+    });
+    stubStream([]);
+    const { user, onAccept } = renderSheet({ chapters: [existing] }, existing.content);
+
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+
+    expect(await screen.findByText(EMPTY_RESULT_MESSAGE)).toBeInTheDocument();
+    // 空结果不能进入可采用的 done 态：预览与替换/追加按钮都不该出现
+    expect(screen.queryByLabelText('生成结果（可直接修改）')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /替换正文|采用为正文|追加到正文末尾/u }),
+    ).not.toBeInTheDocument();
+    expect(onAccept).not.toHaveBeenCalled();
+    // 保留重试入口：错误提示就在表单里，可直接再点「开始生成」
+    expect(screen.getByRole('button', { name: '开始生成' })).toBeInTheDocument();
+
+    const chapters = await harness.repository.listChapters(context.novel.id);
+    expect(chapters.find((item) => item.id === existing.id)?.content).toBe('原有的正文。');
+  });
+
+  it('只有纯空白的 delta 也算空结果，不进入可采用状态', async () => {
+    stubStream(['\n  ']);
+    const { user } = renderSheet();
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+
+    expect(await screen.findByText(EMPTY_RESULT_MESSAGE)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /替换正文|采用为正文/u })).not.toBeInTheDocument();
+
+    // 错误态可以重试：换成正常响应后重试能进入预览
+    stubStream(['重试后的正文']);
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+    expect(await screen.findByLabelText('生成结果（可直接修改）')).toHaveValue('重试后的正文');
+  });
+
+  it('max_tokens 被拒后重试仍为空：同样按空结果处理', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchSpy = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      if (bodies.length === 1) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: { message: 'Invalid max_tokens value' } }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+      }
+      return Promise.resolve(sseResponse(textDeltaEvents([])));
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const { user, onAccept } = renderSheet();
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+
+    expect(await screen.findByText(EMPTY_RESULT_MESSAGE)).toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(bodies[1]).not.toHaveProperty('max_tokens');
+    expect(screen.queryByRole('button', { name: /替换正文|采用为正文/u })).not.toBeInTheDocument();
+    expect(onAccept).not.toHaveBeenCalled();
+  });
+});
+
 describe('生成差额与手动继续补写（S4）', () => {
   /** 3000 个汉字 = countWords 3000，相对 6000 目标正好一半（<85%） */
   const HALF = '字'.repeat(3000);
@@ -376,6 +444,23 @@ describe('生成差额与手动继续补写（S4）', () => {
     );
     // 按剩余 3000 字推导：ceil(3000×1.8)+800=6200，而不是整章目标推导的 8192
     expect(body.max_tokens).toBe(6200);
+  });
+
+  it('续写返回空内容时保留原生成稿并给出可见提示', async () => {
+    stubSequence([{ deltas: ['短稿。'] }, { deltas: [] }]);
+    const { user, onAccept } = renderSheet();
+    await generate(user);
+
+    await user.click(screen.getByRole('button', { name: '继续补写' }));
+
+    expect(await screen.findByText(/续写没有返回新内容/u)).toBeInTheDocument();
+    // 不得清空已有生成稿：预览仍是原稿，且不进入错误态
+    expect(screen.getByLabelText('生成结果（可直接修改）')).toHaveValue('短稿。');
+    expect(screen.queryByText(/模型没有返回正文/u)).not.toBeInTheDocument();
+    // 仍可继续补写，也可以直接采用原稿
+    expect(screen.getByRole('button', { name: '继续补写' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '采用为正文' })).toBeInTheDocument();
+    expect(onAccept).not.toHaveBeenCalled();
   });
 
   it('完整但略低于目标（90%）：标题「接近目标」，不弹补写块', async () => {
@@ -588,5 +673,131 @@ describe('注入清单的文风锚点说明（M4.1）', () => {
     expect(await screen.findByText('本次注入')).toBeInTheDocument();
     expect(screen.queryByText(/文风锚点只用于对齐语感/u)).not.toBeInTheDocument();
     expect(screen.queryByText(/文风锚点 · /u)).not.toBeInTheDocument();
+  });
+});
+
+describe('流式中断与结束状态（审计 §3.5）', () => {
+  /** 先流出正文，再发一帧 error 并关闭：兼容服务商常见的失败形态 */
+  function stubErrorAfter(deltas: string[], message = 'upstream failed') {
+    const events = [
+      ...deltas.map(
+        (delta) => `data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`,
+      ),
+      `data: ${JSON.stringify({ error: { message, type: 'server_error' } })}\n\n`,
+    ];
+    const fetchSpy = vi.fn(() => Promise.resolve(sseResponse(events)));
+    vi.stubGlobal('fetch', fetchSpy);
+    return fetchSpy;
+  }
+
+  it('首次生成中途服务端报错：保留已生成正文、标记未完成，采用需二次确认', async () => {
+    stubErrorAfter(['写到一半的正文。']);
+    const { user, onAccept } = renderSheet();
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+
+    expect(await screen.findByText('生成未完成')).toBeInTheDocument();
+    expect(screen.getByLabelText('生成结果（可直接修改）')).toHaveValue('写到一半的正文。');
+    expect(screen.getByText(/已保留已生成的 8 字/u)).toBeInTheDocument();
+
+    // 部分稿采用必须先确认，并把 incomplete 事实传给调用方
+    await user.click(screen.getByRole('button', { name: '采用为正文' }));
+    expect(await screen.findByRole('dialog', { name: '仍要采用不完整内容？' })).toBeInTheDocument();
+    expect(onAccept).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: '仍要采用' }));
+    await waitFor(() =>
+      expect(onAccept).toHaveBeenCalledWith('写到一半的正文。', 'replace', {
+        incomplete: 'error',
+      }),
+    );
+  });
+
+  it('只有错误帧、没有正文时保持错误态，不提供采用入口', async () => {
+    stubErrorAfter([]);
+    const { user, onAccept } = renderSheet();
+    await user.click(screen.getByRole('button', { name: '开始生成' }));
+
+    expect(await screen.findByText(/模型服务返回错误：upstream failed/u)).toBeInTheDocument();
+    expect(screen.queryByLabelText('生成结果（可直接修改）')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /替换正文|采用为正文/u })).not.toBeInTheDocument();
+    expect(onAccept).not.toHaveBeenCalled();
+  });
+
+  it('续写中途报错：保留原生成稿与已补出的内容，并标记未完成', async () => {
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => {
+        call += 1;
+        if (call === 1) return Promise.resolve(sseResponse(textDeltaEvents(['短稿。'])));
+        return Promise.resolve(
+          sseResponse([
+            `data: ${JSON.stringify({ choices: [{ delta: { content: '补出的半句。' } }] })}\n\n`,
+            `data: ${JSON.stringify({ error: { message: 'upstream failed' } })}\n\n`,
+          ]),
+        );
+      }),
+    );
+    const { user, onAccept } = renderSheet();
+    await generate(user);
+    await user.click(screen.getByRole('button', { name: '继续补写' }));
+
+    expect(await screen.findByText('生成未完成')).toBeInTheDocument();
+    expect(screen.getByLabelText('生成结果（可直接修改）')).toHaveValue('短稿。\n\n补出的半句。');
+    expect(screen.getByText(/已保留补出的内容/u)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '采用为正文' }));
+    expect(await screen.findByRole('dialog', { name: '仍要采用不完整内容？' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '仍要采用' }));
+    await waitFor(() =>
+      expect(onAccept).toHaveBeenCalledWith('短稿。\n\n补出的半句。', 'replace', {
+        incomplete: 'error',
+      }),
+    );
+  });
+
+  it('续写中途报错且没有补出内容：保留原生成稿，不进入错误态', async () => {
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => {
+        call += 1;
+        if (call === 1) return Promise.resolve(sseResponse(textDeltaEvents(['短稿。'])));
+        return Promise.resolve(
+          sseResponse([`data: ${JSON.stringify({ error: { message: 'upstream failed' } })}\n\n`]),
+        );
+      }),
+    );
+    const { user } = renderSheet();
+    await generate(user);
+    await user.click(screen.getByRole('button', { name: '继续补写' }));
+
+    expect(await screen.findByText(/已保留原生成稿/u)).toBeInTheDocument();
+    expect(screen.getByLabelText('生成结果（可直接修改）')).toHaveValue('短稿。');
+    expect(screen.queryByText('生成失败')).not.toBeInTheDocument();
+  });
+
+  it('既没有 [DONE] 也没有 finish_reason：提示无法确认结束，但不强制二次确认', async () => {
+    const events = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: '完整正文' } }] })}\n\n`,
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(sseResponse(events))),
+    );
+    const { user } = renderSheet();
+    await generate(user);
+
+    expect(screen.getByText(/没有回传结束标记/u)).toBeInTheDocument();
+    // 未知结束不等于失败：仍可直接采用
+    expect(screen.getByRole('button', { name: '采用为正文' })).toBeInTheDocument();
+    expect(screen.queryByText(/生成被截断/u)).not.toBeInTheDocument();
+  });
+
+  it('有 [DONE] 时不提示「无法确认结束」', async () => {
+    stubStream(['完整正文']);
+    const { user } = renderSheet();
+    await generate(user);
+
+    expect(screen.queryByText(/没有回传结束标记/u)).not.toBeInTheDocument();
   });
 });

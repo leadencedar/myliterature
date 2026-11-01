@@ -1,13 +1,29 @@
 import { z } from 'zod';
 import type { NovelRepository, OutlineTreeInputNode } from '@/data/NovelRepository';
-import { now } from '@/domain/primitives';
-import { RubricSchema, type Proposal } from '@/domain/schema';
+import {
+  RubricSchema,
+  type Chapter,
+  type ChapterSummary,
+  type KnowledgeEntry,
+  type Novel,
+  type OutlineNode,
+  type Proposal,
+  type SideStory,
+  type StyleProfile,
+} from '@/domain/schema';
 import {
   ScenarioOutlinePayloadSchema,
   parseScenarioOutline,
   toScenarioOutlinePlan,
 } from '@/features/scenario/pathOutline';
-import { parseOutlineTree, type OutlineDraft } from './outlineText';
+import { ProposalConflictError, baseFromDiff, threeWayMerge } from './conflicts';
+import { entryFieldSpecs, fieldSpecsFor, type FieldSpec } from './fields';
+import {
+  buildOutlineDrafts,
+  parseOutlineTree,
+  serializeOutlineTree,
+  type OutlineDraft,
+} from './outlineText';
 
 /**
  * Proposal 落库。
@@ -93,6 +109,35 @@ const NovelPayload = z.object({
   title: z.string().min(1).optional(),
 });
 
+/**
+ * merge / replace 的公共落库路径：三方合并出「只含提案真正改动字段」的 patch。
+ *
+ * 冲突时抛 ProposalConflictError —— 整条提案的事务回滚、状态保持 pending，
+ * 作者重新生成后再采用即可，不会出现「写了一半」或「静默覆盖」。
+ */
+async function mergeFields(params: {
+  specs: FieldSpec[];
+  proposal: Proposal;
+  current: unknown;
+  payload: unknown;
+  extraKeys?: string[];
+  labels?: Record<string, string>;
+}): Promise<Record<string, unknown>> {
+  const { specs, proposal, current, payload, extraKeys, labels } = params;
+  // 新提案带生成时快照；旧提案没有 base，用 diff.before 重建基准（规格字段）
+  const base = proposal.base ?? baseFromDiff(specs, proposal.diff);
+  const { patch, conflicts } = threeWayMerge({
+    specs,
+    base,
+    current,
+    payload,
+    ...(extraKeys ? { extraKeys } : {}),
+    ...(labels ? { labels } : {}),
+  });
+  if (conflicts.length > 0) throw new ProposalConflictError(conflicts);
+  return patch;
+}
+
 /** 把一条提案写入数据库。调用方负责标记状态 */
 export async function applyProposal(repo: NovelRepository, proposal: Proposal): Promise<void> {
   const key = `${proposal.target}:${proposal.action}` as const;
@@ -114,8 +159,27 @@ export async function applyProposal(repo: NovelRepository, proposal: Proposal): 
       const current = await repo.getEntry(targetId);
       if (!current) throw new Error('要合并的条目已不存在，可能已被删除');
       const payload = EntryMergePayload.parse(proposal.payload);
-      // 版本号递增，供后续的冲突提示使用
-      const patch = { ...payload, version: current.version + 1 };
+      const categories = await repo.listCategories(proposal.novelId);
+      const category = categories.find(
+        (item) => item.id === (payload.categoryId ?? current.categoryId),
+      );
+      const fields = await mergeFields({
+        specs: entryFieldSpecs(category),
+        proposal,
+        current,
+        payload,
+        extraKeys: ['categoryId', 'pinned', 'sourceChapterIds'],
+        labels: { categoryId: '所属分类', pinned: '置顶', sourceChapterIds: '来源章节' },
+      });
+      // fields 是嵌套对象：仓储的 updateEntry 是浅合并，必须先把未变字段补全，
+      // 否则 patch.fields 会把整块 fields 替换掉，丢掉作者保留的其他字段
+      const patch = { ...fields, version: current.version + 1 } as Partial<KnowledgeEntry>;
+      if (fields.fields && typeof fields.fields === 'object') {
+        patch.fields = {
+          ...current.fields,
+          ...(fields.fields as Record<string, string>),
+        };
+      }
       // 只有合并提案可能来自提升（同名通用条目）；替换提案的提升是字段覆盖，不涉及本线条目
       const { promoteFrom } =
         proposal.action === 'merge'
@@ -137,7 +201,29 @@ export async function applyProposal(repo: NovelRepository, proposal: Proposal): 
     case 'outlineNode:merge':
     case 'outlineNode:replace': {
       const targetId = requireTargetId(proposal);
-      await repo.updateOutlineNode(targetId, OutlinePatchPayload.parse(proposal.payload));
+      const payload = OutlinePatchPayload.parse(proposal.payload);
+      const current = (await repo.listOutline(proposal.novelId)).find(
+        (node) => node.id === targetId,
+      );
+      if (!current) {
+        // 目标不存在时交给仓储抛统一错误
+        await repo.updateOutlineNode(targetId, payload);
+        return;
+      }
+      const patch = await mergeFields({
+        specs: fieldSpecsFor('outlineNode'),
+        proposal,
+        current,
+        payload,
+        extraKeys: ['parentId', 'order', 'linkedEntryIds', 'status'],
+        labels: {
+          parentId: '上级节点',
+          order: '排序',
+          linkedEntryIds: '关联条目',
+          status: '状态',
+        },
+      });
+      await repo.updateOutlineNode(targetId, patch as Partial<OutlineNode>);
       return;
     }
 
@@ -148,6 +234,27 @@ export async function applyProposal(repo: NovelRepository, proposal: Proposal): 
       const tree = parseOutlineTree(outlineText);
       if (tree.length === 0) {
         throw new Error('大纲内容为空，或没有以 # 开头的标题行');
+      }
+
+      // 替换整棵子树前先确认大纲在提案生成后没被手动改过：
+      // 删旧建新会静默丢掉等待期作者改的内容，这种情况应当要求重新生成
+      if (proposal.action === 'replace') {
+        const currentNodes = await repo.listOutline(proposal.novelId);
+        const currentText = serializeOutlineTree(
+          buildOutlineDrafts(currentNodes, parentId ?? null),
+        );
+        const baseText = (proposal.base as { outlineText?: unknown } | undefined)?.outlineText;
+        if (typeof baseText === 'string' && currentText !== baseText) {
+          throw new ProposalConflictError([
+            {
+              field: 'outlineText',
+              label: '大纲内容',
+              base: baseText.slice(0, 40),
+              current: currentText.slice(0, 40),
+              proposed: outlineText.slice(0, 40),
+            },
+          ]);
+        }
       }
 
       // 挂载点的存在性/归属、append 的起始 order、replace 的删旧建新全部收在仓储事务里。
@@ -171,7 +278,21 @@ export async function applyProposal(repo: NovelRepository, proposal: Proposal): 
     case 'chapter:merge':
     case 'chapter:replace': {
       const targetId = requireTargetId(proposal);
-      await repo.updateChapter(targetId, ChapterPayload.parse(proposal.payload));
+      const payload = ChapterPayload.parse(proposal.payload);
+      const current = await repo.getChapter(targetId);
+      if (!current) {
+        await repo.updateChapter(targetId, payload);
+        return;
+      }
+      const patch = await mergeFields({
+        specs: fieldSpecsFor('chapter'),
+        proposal,
+        current,
+        payload,
+        extraKeys: ['outlineNodeId', 'status', 'source'],
+        labels: { outlineNodeId: '大纲节点', status: '状态', source: '来源' },
+      });
+      await repo.updateChapter(targetId, patch as Partial<Chapter>);
       return;
     }
 
@@ -180,7 +301,24 @@ export async function applyProposal(repo: NovelRepository, proposal: Proposal): 
     case 'chapterSummary:replace': {
       const payload = SummaryPayload.parse(proposal.payload);
       const { chapterId, ...rest } = payload;
-      await repo.upsertSummary(proposal.novelId, chapterId, rest);
+      if (proposal.action === 'create') {
+        await repo.upsertSummary(proposal.novelId, chapterId, rest);
+        return;
+      }
+      const current = await repo.getSummaryByChapter(chapterId);
+      if (!current) {
+        await repo.upsertSummary(proposal.novelId, chapterId, rest);
+        return;
+      }
+      const patch = await mergeFields({
+        specs: fieldSpecsFor('chapterSummary'),
+        proposal,
+        current,
+        payload,
+        extraKeys: ['appearingEntryIds'],
+        labels: { appearingEntryIds: '出场条目' },
+      });
+      await repo.upsertSummary(proposal.novelId, chapterId, patch as Partial<ChapterSummary>);
       return;
     }
 
@@ -188,27 +326,81 @@ export async function applyProposal(repo: NovelRepository, proposal: Proposal): 
     case 'styleProfile:merge':
     case 'styleProfile:replace': {
       const { customRubric, ...rest } = StyleProfilePayload.parse(proposal.payload);
-      await repo.upsertStyleProfile(proposal.novelId, {
-        ...rest,
-        // rubric 只给了部分维度时补齐其余为空串，避免存进半个对象
-        ...(customRubric ? { customRubric: RubricSchema.parse(customRubric) } : {}),
+      // rubric 先整体校验（缺维度会被补齐），写入时再按字段三方合并
+      const rubric = customRubric ? RubricSchema.parse(customRubric) : undefined;
+      const current = await repo.getStyleProfile(proposal.novelId);
+      if (proposal.action === 'create' || !current) {
+        await repo.upsertStyleProfile(proposal.novelId, {
+          ...rest,
+          ...(rubric ? { customRubric: rubric } : {}),
+        });
+        return;
+      }
+      const patch = await mergeFields({
+        specs: fieldSpecsFor('styleProfile'),
+        proposal,
+        current,
+        payload: proposal.payload,
+        extraKeys: ['extraInstruction'],
+        labels: { extraInstruction: '额外要求' },
       });
+      // customRubric 同理：逐维合并，别把没改的维度整块抹掉
+      if (patch.customRubric && typeof patch.customRubric === 'object') {
+        (patch as Record<string, unknown>).customRubric = {
+          ...current.customRubric,
+          ...(patch.customRubric as Record<string, string>),
+        };
+      }
+      await repo.upsertStyleProfile(proposal.novelId, patch as Partial<StyleProfile>);
       return;
     }
 
-    case 'novel:create':
-    case 'novel:merge':
-    case 'novel:replace': {
+    case 'novel:create': {
       await repo.updateNovel(proposal.novelId, NovelPayload.parse(proposal.payload));
       return;
     }
+    case 'novel:merge':
+    case 'novel:replace': {
+      const payload = NovelPayload.parse(proposal.payload);
+      const current = await repo.getNovel(proposal.novelId);
+      if (!current) {
+        await repo.updateNovel(proposal.novelId, payload);
+        return;
+      }
+      const patch = await mergeFields({
+        specs: fieldSpecsFor('novel'),
+        proposal,
+        current,
+        payload,
+        extraKeys: ['title'],
+        labels: { title: '书名' },
+      });
+      await repo.updateNovel(proposal.novelId, patch as Partial<Novel>);
+      return;
+    }
 
-    case 'sideStory:create':
+    case 'sideStory:create': {
+      const payload = SideStoryPayload.parse(proposal.payload);
+      await repo.updateSideStory(requireTargetId(proposal), payload);
+      return;
+    }
     case 'sideStory:merge':
     case 'sideStory:replace': {
       // 外传已被删除时由仓储抛「这部外传已不存在，可能已被删除」，提案留在待确认里
+      const targetId = requireTargetId(proposal);
       const payload = SideStoryPayload.parse(proposal.payload);
-      await repo.updateSideStory(requireTargetId(proposal), payload);
+      const current = await repo.getSideStory(targetId);
+      if (!current) {
+        await repo.updateSideStory(targetId, payload);
+        return;
+      }
+      const patch = await mergeFields({
+        specs: fieldSpecsFor('sideStory'),
+        proposal,
+        current,
+        payload,
+      });
+      await repo.updateSideStory(targetId, patch as Partial<SideStory>);
       return;
     }
 
@@ -273,6 +465,10 @@ export interface AcceptResult {
  *
  * 逐条处理而非整体事务：一条失败（比如目标条目已被手动删除）不应该
  * 让其余十几条一起回滚。失败的提案保持 pending，用户可以单独处理或忽略。
+ *
+ * 但单条提案内部必须原子：读状态、业务写入、标记 accepted 由仓储放在同一个
+ * 事务里（applyProposalAtomically），状态写入失败时业务写入一起回滚，
+ * 重试或并发采用都不会产生第二份业务结果。
  */
 export async function acceptProposals(
   repo: NovelRepository,
@@ -282,8 +478,8 @@ export async function acceptProposals(
 
   for (const proposal of proposals) {
     try {
-      await applyProposal(repo, proposal);
-      await repo.updateProposal(proposal.id, { status: 'accepted', decidedAt: now() });
+      // apply 拿到的是调用方准备提交的提案（含用户在确认界面的行内修改）
+      await repo.applyProposalAtomically(proposal, (current) => applyProposal(repo, current));
       result.accepted.push(proposal.id);
     } catch (cause) {
       result.failed.push({
@@ -297,9 +493,12 @@ export async function acceptProposals(
   return result;
 }
 
-/** 忽略提案：保留记录而不删除，便于回溯「当时拒绝了什么」 */
+/**
+ * 忽略提案：保留记录而不删除，便于回溯「当时拒绝了什么」。
+ * 只对仍待确认的提案生效 —— 并发场景下「忽略」不能覆盖已经采用的提案。
+ */
 export async function rejectProposals(repo: NovelRepository, proposalIds: string[]): Promise<void> {
   for (const id of proposalIds) {
-    await repo.updateProposal(id, { status: 'rejected', decidedAt: now() });
+    await repo.rejectProposalAtomically(id);
   }
 }

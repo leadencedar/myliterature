@@ -47,6 +47,17 @@ function readPath(payload: unknown, path: string): unknown {
   return cursor;
 }
 
+/**
+ * 字段在对象里是否有值（键存在且不是 undefined）。
+ *
+ * 与 getFieldValue 的区别：`undefined` / 缺键表示「提案没提这个字段」，
+ * 与「提案把它改成了空串」是两种语义。替换类提案的 payload 常常只带部分字段，
+ * 三方合并必须能区分，否则会把没提的字段当成清空。
+ */
+export function hasFieldValue(payload: unknown, spec: FieldSpec): boolean {
+  return readPath(payload, spec.path) !== undefined;
+}
+
 /** 把任意字段值规范成用于展示与比较的字符串 */
 export function getFieldValue(payload: unknown, spec: FieldSpec): string {
   const raw = readPath(payload, spec.path);

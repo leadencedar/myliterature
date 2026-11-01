@@ -29,7 +29,8 @@ jobs:
       - name: 配置 Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 22
+          # 与 package.json 的 engines 要求一致；本地开发同样用 .nvmrc 切换
+          node-version-file: .nvmrc
           cache: npm
 
       - name: 安装依赖

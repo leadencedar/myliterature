@@ -29,6 +29,8 @@ interface ChatCompletionResponse {
     prompt_cache_hit_tokens?: number;
     prompt_tokens_details?: { cached_tokens?: number };
   } | null;
+  /** HTTP 200 也可能用错误体表达失败（兼容服务端 / 网关常见），必须识别 */
+  error?: { message?: string; type?: string; code?: string | number } | null;
 }
 
 /**
@@ -74,13 +76,23 @@ export class OpenAiCompatibleClient implements LlmClient {
       });
     }
 
+    // 有的兼容服务端 / 网关用 HTTP 200 + {"error":…} 表达失败。
+    // 不识别会退回空正文，上层只能报「解析失败」，把真正的原因埋掉
+    if (body.error) {
+      throw new LlmError('server', errorMessageFromPayload(body.error), {
+        detail: JSON.stringify(body.error),
+      });
+    }
+
     const message = body.choices?.[0]?.message;
     // 请求不设 n，实际就是 choices[0]；取最后一项是为了和流式「最后一个非空值」语义一致
     const lastChoice = body.choices?.[body.choices.length - 1];
+    const finishReason = lastChoice?.finish_reason ?? null;
     const result: ChatResult = {
       content: message?.content ?? '',
       reasoning: message?.reasoning_content ?? '',
-      finishReason: lastChoice?.finish_reason ?? null,
+      finishReason,
+      endReason: finishReason ? 'done' : 'unknown',
     };
     const usage = normalizeUsage(body.usage);
     if (usage) result.usage = usage;
@@ -101,11 +113,24 @@ export class OpenAiCompatibleClient implements LlmClient {
     let reasoning = '';
     let usage: TokenUsage | undefined;
     let finishReason: string | null = null;
+    /** 是否见过 [DONE]：用来区分「明确收尾」与「连接被掐断」 */
+    let sawDone = false;
 
     try {
-      for await (const payload of parseSseStream(response.body)) {
+      for await (const payload of parseSseStream(response.body, () => {
+        sawDone = true;
+      })) {
         const chunk = parseChunk(payload);
         if (!chunk) continue;
+
+        // 流中错误帧：先保留已经流出的正文，再把错误抛给上层
+        // （上层可以把它标记为未完成、继续补写或让作者确认采用部分稿）
+        if (chunk.error) {
+          throw new LlmError('server', errorMessageFromPayload(chunk.error), {
+            detail: JSON.stringify(chunk.error),
+            partial: { content, reasoning },
+          });
+        }
 
         const delta = chunk.choices?.[0]?.delta;
         if (delta?.content) {
@@ -128,7 +153,14 @@ export class OpenAiCompatibleClient implements LlmClient {
       throw errorFromThrown(cause);
     }
 
-    const result: ChatResult = { content, reasoning, finishReason };
+    const result: ChatResult = {
+      content,
+      reasoning,
+      finishReason,
+      // 有 finish_reason 或见过 [DONE] 才算明确收尾；两者都没有时不能当失败，
+      // 但要标记「未知结束」，让上层自行决定是否提示
+      endReason: finishReason || sawDone ? 'done' : 'unknown',
+    };
     if (usage) result.usage = usage;
     return result;
   }
@@ -243,4 +275,21 @@ async function readErrorDetail(response: Response): Promise<string> {
   } catch {
     return '';
   }
+}
+
+/**
+ * 把服务端错误载荷收成一句可读提示。
+ *
+ * 兼容服务商的错误结构不统一：有的给 message，有的只有 type/code。
+ * 至少保证 UI 上不是一句干巴巴的「请求失败」。
+ */
+function errorMessageFromPayload(payload: {
+  message?: string;
+  type?: string;
+  code?: string | number;
+}): string {
+  const message = payload.message?.trim();
+  if (message) return `模型服务返回错误：${message}`;
+  const code = payload.code !== undefined ? `（${String(payload.code)}）` : '';
+  return `模型服务在生成过程中返回错误${code}，请稍后重试`;
 }

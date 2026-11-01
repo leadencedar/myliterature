@@ -179,7 +179,12 @@ describe('非流式响应', () => {
   it('缺字段时给出空值而不是崩溃', async () => {
     const { client } = makeClient([jsonResponse({})]);
     const result = await client.chat(BASIC);
-    expect(result).toEqual({ content: '', reasoning: '', finishReason: null });
+    expect(result).toEqual({
+      content: '',
+      reasoning: '',
+      finishReason: null,
+      endReason: 'unknown',
+    });
   });
 
   it('取 choices 最后一项的 finish_reason，缺失时为 null', async () => {
@@ -200,6 +205,17 @@ describe('非流式响应', () => {
   it('响应不是 JSON 时报 parse 错误', async () => {
     const { client } = makeClient([new Response('<html>502</html>', { status: 200 })]);
     await expect(client.chat(BASIC)).rejects.toMatchObject({ kind: 'parse' });
+  });
+
+  it('HTTP 200 但响应体是 error 时抛 server 错误，而不是返回空正文', async () => {
+    const { client } = makeClient([
+      jsonResponse({ error: { message: '余额不足', code: 'insufficient_quota' } }),
+    ]);
+
+    const error = await captureError(() => client.chat(BASIC));
+
+    expect(error.kind).toBe('server');
+    expect(error.message).toContain('余额不足');
   });
 });
 
@@ -275,6 +291,52 @@ describe('流式响应', () => {
     const { client } = makeClient([sseResponse(textDeltaEvents(['x']))]);
 
     expect((await client.streamChat(BASIC, {})).finishReason).toBeNull();
+  });
+
+  it('有 [DONE] 或 finish_reason 时 endReason=done；两者都没有时是未知结束', async () => {
+    const withDone = makeClient([sseResponse(textDeltaEvents(['x']))]);
+    expect((await withDone.client.streamChat(BASIC, {})).endReason).toBe('done');
+
+    const withFinish = makeClient([
+      sseResponse(
+        textDeltaEvents(
+          ['x'],
+          [`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`],
+        ),
+      ),
+    ]);
+    expect((await withFinish.client.streamChat(BASIC, {})).endReason).toBe('done');
+
+    // 只有正文、连接直接关闭：不能当失败，但要标出「未知结束」
+    const noSignal = makeClient([
+      sseResponse([`data: ${JSON.stringify({ choices: [{ delta: { content: 'x' } }] })}\n\n`]),
+    ]);
+    expect((await noSignal.client.streamChat(BASIC, {})).endReason).toBe('unknown');
+  });
+
+  it('流中 error 载荷转成 server 错误，并保留已生成的正文', async () => {
+    const events = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: '写到一半' } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: '想了一半' } }] })}\n\n`,
+      `data: ${JSON.stringify({ error: { message: 'upstream failed', type: 'server_error' } })}\n\n`,
+    ];
+    const { client } = makeClient([sseResponse(events)]);
+
+    const error = await captureError(() => client.streamChat(BASIC, {}));
+
+    expect(error.kind).toBe('server');
+    expect(error.message).toContain('upstream failed');
+    expect(error.partial).toEqual({ content: '写到一半', reasoning: '想了一半' });
+  });
+
+  it('流尾只剩 data: [DONE] 且没有换行时也能识别为明确收尾', async () => {
+    const { client } = makeClient([
+      sseResponse([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'x' } }] })}\n\ndata: [DONE]`,
+      ]),
+    ]);
+
+    expect((await client.streamChat(BASIC, {})).endReason).toBe('done');
   });
 
   it('没有响应体时报错', async () => {

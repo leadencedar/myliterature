@@ -1,11 +1,12 @@
 import 'fake-indexeddb/auto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppDatabase } from '@/data/dexie/db';
 import { DexieNovelRepository } from '@/data/dexie/DexieNovelRepository';
 import { emptyDelta, type Novel, type Proposal, type SideStory } from '@/domain/schema';
 import { acceptProposals, applyProposal, rejectProposals } from './apply';
 import { buildCreateProposal, buildMergeProposal, buildReplaceProposal, newBatchId } from './build';
 import { entryFieldSpecs, fieldSpecsFor } from './fields';
+import { buildOutlineDrafts, serializeOutlineTree } from './outlineText';
 
 let database: AppDatabase;
 let repo: DexieNovelRepository;
@@ -323,7 +324,12 @@ describe('大纲树事务化（outlineTree）', () => {
         label: '细化 · 第一卷',
         specs: fieldSpecsFor('outlineTree'),
         targetId: anchor.id,
-        current: { outlineText: '# 旧章\n旧梗概' },
+        // 基准必须是库里的真实快照：构建器按它存 base，三方合并据此判断大纲有没有被改过
+        current: {
+          outlineText: serializeOutlineTree(
+            buildOutlineDrafts(await repo.listOutline(novel.id), anchor.id),
+          ),
+        },
         payload: { outlineText: '# 新章\n新梗概', parentId: anchor.id },
       }),
     );
@@ -351,7 +357,9 @@ describe('大纲树事务化（outlineTree）', () => {
         label: '全书大纲',
         specs: fieldSpecsFor('outlineTree'),
         targetId: novel.id,
-        current: { outlineText: '# 旧的第一卷\n## 旧的第一章' },
+        current: {
+          outlineText: serializeOutlineTree(buildOutlineDrafts(await repo.listOutline(novel.id))),
+        },
         payload: { outlineText: '# 第一卷 风起\n## 第1章 雪夜' },
       }),
     );
@@ -955,5 +963,266 @@ describe('推演沉淀（scenarioOutline:create）', () => {
     await expect(
       applyProposal(repo, { ...proposal, action: 'replace', targetId: 'x' }),
     ).rejects.toThrow('沉淀提案只支持新建');
+  });
+});
+
+describe('原子采用与状态一致（applyProposalAtomically）', () => {
+  /** 一条待确认的「新建人物」提案：采用后应产生一个知识条目 */
+  async function atomicProposal(title: string): Promise<Proposal> {
+    return buildCreateProposal({
+      novelId: novel.id,
+      origin: 'generate',
+      target: 'knowledgeEntry',
+      label: `人物 · ${title}`,
+      specs: await characterSpecs(),
+      payload: { categoryId: characterCategoryId, title },
+    });
+  }
+
+  it('状态写入失败时业务写入一起回滚，重试只产生一份条目', async () => {
+    const proposal = await atomicProposal('状态失败');
+    await repo.createProposals([proposal]);
+    const spy = vi.spyOn(repo, 'updateProposal').mockRejectedValueOnce(new Error('状态写入失败'));
+
+    const first = await acceptProposals(repo, [proposal]);
+    expect(first.failed).toHaveLength(1);
+    // 业务写入必须回滚：不能出现「条目已建、提案还待确认」
+    expect(await repo.listEntries(novel.id)).toHaveLength(0);
+    expect((await repo.listProposals(novel.id))[0]!.status).toBe('pending');
+
+    const second = await acceptProposals(repo, [proposal]);
+    expect(second.accepted).toEqual([proposal.id]);
+    expect(await repo.listEntries(novel.id)).toHaveLength(1);
+    spy.mockRestore();
+  });
+
+  it('并发采用同一提案只产生一份业务结果', async () => {
+    const proposal = await atomicProposal('并发采用');
+    await repo.createProposals([proposal]);
+
+    const [a, b] = await Promise.all([
+      acceptProposals(repo, [proposal]),
+      acceptProposals(repo, [proposal]),
+    ]);
+
+    expect(a.failed).toHaveLength(0);
+    expect(b.failed).toHaveLength(0);
+    expect(await repo.listEntries(novel.id)).toHaveLength(1);
+  });
+
+  it('已忽略的提案不能再被采用', async () => {
+    const proposal = await atomicProposal('已忽略');
+    await repo.createProposals([proposal]);
+    await rejectProposals(repo, [proposal.id]);
+
+    const result = await acceptProposals(repo, [proposal]);
+    expect(result.failed.map((item) => item.proposalId)).toEqual([proposal.id]);
+    expect(await repo.listEntries(novel.id)).toHaveLength(0);
+    expect((await repo.listProposals(novel.id))[0]!.status).toBe('rejected');
+  });
+
+  it('已采用的提案不会被后续忽略改回 rejected', async () => {
+    const proposal = await atomicProposal('已采用');
+    await repo.createProposals([proposal]);
+    await acceptProposals(repo, [proposal]);
+
+    await rejectProposals(repo, [proposal.id]);
+
+    expect((await repo.listProposals(novel.id))[0]!.status).toBe('accepted');
+  });
+
+  it('确认界面上的行内修改会随原子提交一起落库', async () => {
+    const proposal = await atomicProposal('原始标题');
+    await repo.createProposals([proposal]);
+    // ProposalInbox 会把行内编辑后的 payload 一并传进来
+    const edited: Proposal = {
+      ...proposal,
+      payload: { ...(proposal.payload as Record<string, unknown>), title: '行内改后的标题' },
+    };
+
+    await acceptProposals(repo, [edited]);
+
+    expect((await repo.listEntries(novel.id))[0]!.title).toBe('行内改后的标题');
+  });
+});
+
+describe('冲突检测（三方合并，审计 §3.3）', () => {
+  /** 生成一条「加别名」的合并提案：用它覆盖"提案改动"与"作者改动"并存的场景 */
+  async function mergeAliasProposal(entry: Awaited<ReturnType<typeof repo.createEntry>>) {
+    return buildMergeProposal({
+      novelId: novel.id,
+      origin: 'extract',
+      target: 'knowledgeEntry',
+      label: `人物 · ${entry.title}`,
+      specs: await characterSpecs(),
+      targetId: entry.id,
+      current: entry,
+      incoming: { aliases: ['越哥'] },
+    });
+  }
+
+  it('旧合并提案不回退等待期间手动改过的未触及字段', async () => {
+    const entry = await repo.createEntry(novel.id, {
+      categoryId: characterCategoryId,
+      title: '林越',
+      summary: '少年剑客',
+      aliases: ['阿越'],
+    });
+    const proposal = await mergeAliasProposal(entry);
+    await repo.createProposals([proposal]);
+    // 作者在等待确认期间改了摘要
+    await repo.updateEntry(entry.id, { summary: '手动修正后的摘要' });
+
+    await applyProposal(repo, proposal);
+
+    const after = (await repo.getEntry(entry.id))!;
+    expect(after.summary).toBe('手动修正后的摘要');
+    expect(after.aliases).toEqual(['阿越', '越哥']);
+  });
+
+  it('同一字段双方都改过时拒绝采用：库里的值不变、提案保持 pending', async () => {
+    const entry = await repo.createEntry(novel.id, {
+      categoryId: characterCategoryId,
+      title: '林越',
+      summary: '少年剑客',
+    });
+    const proposal = buildMergeProposal({
+      novelId: novel.id,
+      origin: 'extract',
+      target: 'knowledgeEntry',
+      label: '人物 · 林越',
+      specs: await characterSpecs(),
+      targetId: entry.id,
+      current: entry,
+      incoming: { summary: 'AI 整合后的摘要' },
+    });
+    await repo.createProposals([proposal]);
+    await repo.updateEntry(entry.id, { summary: '作者手动改的摘要' });
+
+    const result = await acceptProposals(repo, [proposal]);
+
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]!.message).toMatch(/冲突/u);
+    const after = (await repo.getEntry(entry.id))!;
+    expect(after.summary).toBe('作者手动改的摘要');
+    expect((await repo.listProposals(novel.id))[0]!.status).toBe('pending');
+  });
+
+  it('冲突时同一批里的可写字段也不会留下半次写入', async () => {
+    const entry = await repo.createEntry(novel.id, {
+      categoryId: characterCategoryId,
+      title: '林越',
+      summary: '少年剑客',
+      aliases: ['阿越'],
+    });
+    const proposal = buildMergeProposal({
+      novelId: novel.id,
+      origin: 'extract',
+      target: 'knowledgeEntry',
+      label: '人物 · 林越',
+      specs: await characterSpecs(),
+      targetId: entry.id,
+      current: entry,
+      incoming: { aliases: ['越哥'], summary: 'AI 摘要' },
+    });
+    await repo.createProposals([proposal]);
+    await repo.updateEntry(entry.id, { summary: '作者摘要' });
+
+    await expect(applyProposal(repo, proposal)).rejects.toThrow(/冲突/u);
+
+    const after = (await repo.getEntry(entry.id))!;
+    // 别名本来可以安全写，但冲突让整条提案回滚，不能只写一半
+    expect(after.aliases).toEqual(['阿越']);
+    expect(after.summary).toBe('作者摘要');
+  });
+
+  it('章节替换保留等待期间手动改的标题', async () => {
+    const chapter = await repo.createChapter(novel.id, {
+      title: '旧标题',
+      content: '旧正文',
+    });
+    const proposal = buildReplaceProposal({
+      novelId: novel.id,
+      origin: 'refine',
+      target: 'chapter',
+      label: '章节 · 第1章',
+      specs: fieldSpecsFor('chapter'),
+      targetId: chapter.id,
+      current: chapter,
+      payload: { content: 'AI 重写后的正文' },
+    });
+    await repo.createProposals([proposal]);
+    await repo.updateChapter(chapter.id, { title: '作者改过的标题' });
+
+    await applyProposal(repo, proposal);
+
+    const after = (await repo.getChapter(chapter.id))!;
+    expect(after.title).toBe('作者改过的标题');
+    expect(after.content).toBe('AI 重写后的正文');
+  });
+
+  it('大纲节点合并保留等待期间手动改的梗概', async () => {
+    const node = await repo.createOutlineNode(novel.id, { title: '第一卷', synopsis: '旧梗概' });
+    const proposal = buildMergeProposal({
+      novelId: novel.id,
+      origin: 'extract',
+      target: 'outlineNode',
+      label: '大纲 · 第一卷',
+      specs: fieldSpecsFor('outlineNode'),
+      targetId: node.id,
+      current: node,
+      incoming: { title: '第一卷 风起' },
+    });
+    await repo.createProposals([proposal]);
+    await repo.updateOutlineNode(node.id, { synopsis: '作者补的梗概' });
+
+    await applyProposal(repo, proposal);
+
+    const after = (await repo.listOutline(novel.id)).find((item) => item.id === node.id)!;
+    expect(after.title).toBe('第一卷 风起');
+    expect(after.synopsis).toBe('作者补的梗概');
+  });
+
+  it('没有 base 的旧提案用 diff.before 重建基准，仍保护未触及字段', async () => {
+    const entry = await repo.createEntry(novel.id, {
+      categoryId: characterCategoryId,
+      title: '林越',
+      summary: '少年剑客',
+      aliases: ['阿越'],
+    });
+    const legacyRow: Proposal = { ...(await mergeAliasProposal(entry)) };
+    legacyRow.base = undefined;
+    await repo.createProposals([legacyRow]);
+    await repo.updateEntry(entry.id, { summary: '手动摘要' });
+
+    await applyProposal(repo, legacyRow);
+
+    const after = (await repo.getEntry(entry.id))!;
+    expect(after.summary).toBe('手动摘要');
+    expect(after.aliases).toEqual(['阿越', '越哥']);
+  });
+
+  it('大纲树替换：提案生成后大纲被改过则拒绝，避免删旧建新吞掉修改', async () => {
+    const volume = await repo.createOutlineNode(novel.id, { title: '第一卷' });
+    const currentText = serializeOutlineTree(buildOutlineDrafts(await repo.listOutline(novel.id)));
+    const proposal = buildReplaceProposal({
+      novelId: novel.id,
+      origin: 'generate',
+      target: 'outlineTree',
+      label: '细化 · 第一卷',
+      specs: fieldSpecsFor('outlineTree'),
+      targetId: volume.id,
+      current: { outlineText: currentText },
+      payload: { outlineText: '# 第一卷\n## 新章', parentId: volume.id },
+    });
+    await repo.createProposals([proposal]);
+    // 等待确认期间作者手动加了一章
+    await repo.createOutlineNode(novel.id, { title: '作者新加的章', parentId: volume.id });
+
+    await expect(applyProposal(repo, proposal)).rejects.toThrow(/冲突/u);
+
+    const titles = (await repo.listOutline(novel.id)).map((item) => item.title);
+    expect(titles).toContain('作者新加的章');
+    expect(titles).not.toContain('新章');
   });
 });
