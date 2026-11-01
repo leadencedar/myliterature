@@ -24,14 +24,14 @@
 
 ## 1. 范围与非目标
 
-| 类别 | 阶段 1 范围                                                             | 明确不做                                      |
-| ---- | ----------------------------------------------------------------------- | --------------------------------------------- |
-| 样式 | 新增工作台作用域令牌：正文字体/字号/行高/上限、栏宽、内边距、`h-dvh` 壳 | 不改全站现有字号/颜色；不做暗色；不迁移品牌色 |
-| 路由 | 新增 dev-only 预览路由（`import.meta.env.DEV` 守卫，不进生产）          | 不改 `/write` 的默认行为；不加入主导航        |
-| 布局 | 空壳三区（页头 / 章节栏 / 编辑器占位）+ 响应式切换                      | 不做真实右栏、不做移动操作栏                  |
-| 数据 | 无；静态示例文本                                                        | 不 import repository / LLM；不写 IndexedDB    |
-| 测试 | Playwright 宽度验收（本交付已提供脚本与夹具）                           | 不重写现有 2478 个用例；不改 CI 配置          |
-| 依赖 | 沿用当前本地 `playwright-core`                                          | 不修改 `package.json`（正式接入见 T8）        |
+| 类别 | 阶段 1 范围                                                             | 明确不做                                                                      |
+| ---- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| 样式 | 新增工作台作用域令牌：正文字体/字号/行高/上限、栏宽、内边距、`h-dvh` 壳 | 不改全站现有字号/颜色；不做暗色；不迁移品牌色                                 |
+| 路由 | 新增 dev-only 预览路由（`import.meta.env.DEV` 守卫，不进生产）          | 不改 `/write` 的默认行为；不加入主导航                                        |
+| 布局 | 空壳三区（页头 / 章节栏 / 编辑器占位）+ 响应式切换                      | 不做真实右栏、不做移动操作栏                                                  |
+| 数据 | 无；静态示例文本                                                        | 不 import repository / LLM；不写 IndexedDB                                    |
+| 测试 | Playwright 宽度验收（本交付已提供脚本与夹具）                           | 不重写现有 2478 个用例；不改 CI 配置                                          |
+| 依赖 | `playwright-core@1.64.1`（已加入 devDependency，T8 已完成）             | 新增 `package.json`/`package-lock.json` 条目与 `ui:width` 脚本；CI 接入仍可选 |
 
 ---
 
@@ -84,17 +84,17 @@
 
 估时仅用于排序（S≈0.5 天、M≈1–2 天、L≈3 天），不是工期承诺。
 
-| ID                     | 任务                                                                                                                 | 关键文件                                                                                         | 依赖  | 估时 | 验收                                                      |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ----- | ---- | --------------------------------------------------------- |
-| T0                     | 基线与分支：从 `78ed583` 开 `feat/ui-v2-stage1`；确认工作区干净；记录现有测试/构建基线                               | —                                                                                                | —     | S    | 分支创建；`npm run test:run` 基线记录                     |
-| T1                     | 令牌：新增 `--wb-*` 变量与作用域样式（黑体 17/1.85、上限 `calc(40 * size)`、224/240/24）                             | `src/index.css` 或新 `workbench.css`                                                             | T0    | S    | 变量可在预览页读到；现有页面视觉不变（截图抽查）          |
-| T2                     | 预览路由：dev-only `/__workbench`，动态 import + `import.meta.env.DEV` 守卫；不加入导航                              | `src/app/AppShell.tsx`（或 dev 路由文件）、`src/features/writing/workbench/WorkbenchPreview.tsx` | T0    | S    | 开发环境可打开；生产构建无该路由（T6 验证）               |
-| T3                     | 工作台空壳：页头 + 章节栏（静态章节）+ 编辑器占位（静态正文、底部占位动作）+ skip-link/`main#main`                   | `src/features/writing/workbench/*`                                                               | T1/T2 | M    | 三区可见；无数据请求（Network 面板无 IndexedDB/LLM 调用） |
-| T4                     | 响应式与滚动：≥1280 栏常驻；1024–1279 浮层 + 按钮开关 + 焦点归还；<1024 单栏；`h-dvh`、栏内独立滚动                  | 同上 + 媒体查询                                                                                  | T3    | M    | 五档布局符合预期；打开浮层无横向滚动；Esc 关闭浮层        |
-| T5                     | 验收接入：给预览挂 `data-testid`；运行 `node scripts/ui-width-check.mjs --url http://127.0.0.1:5173/__workbench`     | `scripts/ui-width-check.mjs`（已提供）、预览组件                                                 | T3/T4 | S    | 脚本全 PASS；JSON/截图归档到 PR                           |
-| T6                     | 回归与生产隔离：`format:check`、`typecheck`、`test:run`、`build`；`dist` 搜索 `__workbench` 应为 0；记录 bundle 变化 | —                                                                                                | T2–T5 | S    | 四关全绿；生产无预览入口；bundle 增量有记录               |
-| T7                     | 评审与记录：把 T5 数字写入 PR/本文 §6；确认回滚步骤                                                                  | 本文                                                                                             | T6    | S    | 评审通过；记录完整                                        |
-| T8（可选，不进本阶段） | 把 `playwright-core` 加入 devDependencies，或提供 CI 浏览器安装方案                                                  | `package.json`/CI                                                                                | T5    | S    | 干净 `npm ci` 后脚本仍可跑                                |
+| ID                       | 任务                                                                                                                          | 关键文件                                                                                         | 依赖  | 估时 | 验收                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ----- | ---- | --------------------------------------------------------- |
+| T0                       | 基线与分支：从 `78ed583` 开 `feat/ui-v2-stage1`；确认工作区干净；记录现有测试/构建基线                                        | —                                                                                                | —     | S    | 分支创建；`npm run test:run` 基线记录                     |
+| T1                       | 令牌：新增 `--wb-*` 变量与作用域样式（黑体 17/1.85、上限 `calc(40 * size)`、224/240/24）                                      | `src/index.css` 或新 `workbench.css`                                                             | T0    | S    | 变量可在预览页读到；现有页面视觉不变（截图抽查）          |
+| T2                       | 预览路由：dev-only `/__workbench`，动态 import + `import.meta.env.DEV` 守卫；不加入导航                                       | `src/app/AppShell.tsx`（或 dev 路由文件）、`src/features/writing/workbench/WorkbenchPreview.tsx` | T0    | S    | 开发环境可打开；生产构建无该路由（T6 验证）               |
+| T3                       | 工作台空壳：页头 + 章节栏（静态章节）+ 编辑器占位（静态正文、底部占位动作）+ skip-link/`main#main`                            | `src/features/writing/workbench/*`                                                               | T1/T2 | M    | 三区可见；无数据请求（Network 面板无 IndexedDB/LLM 调用） |
+| T4                       | 响应式与滚动：≥1280 栏常驻；1024–1279 浮层 + 按钮开关 + 焦点归还；<1024 单栏；`h-dvh`、栏内独立滚动                           | 同上 + 媒体查询                                                                                  | T3    | M    | 五档布局符合预期；打开浮层无横向滚动；Esc 关闭浮层        |
+| T5                       | 验收接入：给预览挂 `data-testid`；运行 `node scripts/ui-width-check.mjs --url http://127.0.0.1:5173/__workbench`              | `scripts/ui-width-check.mjs`（已提供）、预览组件                                                 | T3/T4 | S    | 脚本全 PASS；JSON/截图归档到 PR                           |
+| T6                       | 回归与生产隔离：`format:check`、`typecheck`、`test:run`、`build`；`dist` 搜索 `__workbench` 应为 0；记录 bundle 变化          | —                                                                                                | T2–T5 | S    | 四关全绿；生产无预览入口；bundle 增量有记录               |
+| T7                       | 评审与记录：把 T5 数字写入 PR/本文 §6；确认回滚步骤                                                                           | 本文                                                                                             | T6    | S    | 评审通过；记录完整                                        |
+| T8（已完成，2026-11-01） | `playwright-core@1.64.1` 精确加入 devDependencies；新增 `ui:width` / `ui:width:preview` 脚本；浏览器安装与 CI 方案写入 README | `package.json`、`package-lock.json`、`scripts/ui-width-check/README.md`                          | T5    | S    | 干净 `npm ci` 后脚本仍可跑                                |
 
 **顺序**：T0 → T1 → T2 → T3 → T4 → T5 → T6 → T7。T1/T2 可并行，T3 必须在两者之后。
 
@@ -145,7 +145,7 @@ node scripts/ui-width-check.mjs --url http://127.0.0.1:5173/__workbench \
 
 脚本会检查：正文 17px/1.85、≥1024 时 40±1 字/行、1024–1279 栏目默认收起且可打开、≥1280 栏常驻、<1024 单栏底部栏、无横向滚动、无脚本错误。失败返回 1；`--no-fail` 只记录不失败。
 
-**依赖说明**：当前 `node_modules/playwright-core` 是环境里已有的（未写入 `package.json`），所以本阶段脚本可在本机运行；正式接入 CI 前要么加入 devDependency（T8），要么使用 CI 自带浏览器并传 `PLAYWRIGHT_CHROMIUM_PATH`。浏览器路径找不到时脚本会提示。
+**依赖说明**：`playwright-core@1.64.1` 已精确加入 devDependencies（T8）。它不包含浏览器，首次使用需 `npx playwright-core install chromium`；已有本机浏览器时可用 `PLAYWRIGHT_CHROMIUM_PATH` 指定。浏览器安装与可选 CI job 见 [scripts/ui-width-check/README.md](../scripts/ui-width-check/README.md)。
 
 ### 5.1 夹具干跑结果（2026-11-01，本机）
 
@@ -188,7 +188,7 @@ UI v2 阶段 1 · 宽度验收
 | 全局令牌改动影响现有页面            | 视觉回归              | `--wb-*` 作用域变量 + 独立 `workbench.css`；现有页面截图抽查             |
 | 40 字目标依赖字体渲染               | 实际 39 或 41 字      | 脚本允许 ±1；如超差，先调 `max-width` 或字号，不改目标口径               |
 | `fixed` 浮层造成横向滚动            | 移动/窄屏横向拉动     | 浮层用 `visibility` + 定位；脚本检查 `scrollWidth`                       |
-| `playwright-core` 被 `npm ci` 清理  | 脚本跑不了            | T8 加入 devDependency，或由环境提供浏览器；README 记录                   |
+| `playwright-core` 被 `npm ci` 清理  | 脚本跑不了            | 已完成：devDependency + README；剩余可在需要时接入 CI                    |
 | 预览组件误依赖数据/仓库             | 把临时实现带进阶段 2  | 预览只允许静态数据；代码评审检查 import                                  |
 | `h-dvh` 与现有 `Page`/AppShell 冲突 | 双滚动/高度错位       | 预览路由不复用 `Page`；先在预览验证，再进 `/write`                       |
 | 依赖版本与缓存浏览器不匹配          | 启动失败              | 脚本支持 `--chromium` / `PLAYWRIGHT_CHROMIUM_PATH`；失败信息给出路径     |
@@ -210,7 +210,7 @@ UI v2 阶段 1 · 宽度验收
 ## 9. 附注
 
 - 阶段 1 不处理 `Chapter.note`；该字段与 DB v8、备份快照一起在阶段 3 完成（见 v2 规格 §8/§11）。
-- 阶段 1 不改现有测试；Playwright 验收是新增的浏览器检查，不进入 `npm run test:run`（CI 是否接入由 T8 决定）。
+- 阶段 1 不改现有测试；Playwright 验收是新增的浏览器检查，不进入 `npm run test:run`（T8 已提供 CI 方案，实际接入仍可选）。
 - 本文和脚本均可独立评审；脚本/夹具是 QA 工具，不是产品代码。
 
 ---
@@ -236,5 +236,6 @@ UI v2 阶段 1 · 宽度验收
   脚本同时修正了真实页面的 lazy chunk 等待（先等 `workbench-root` 挂载，再测量）。
 
 - **T6 回归与生产隔离**：`format:check` 0、`tsc --noEmit` 0、`test:run` 2599 passed / 5 skipped、`build` 0；`grep -R "__workbench\|阶段 1 预览\|dev preview" dist` 无命中 → 生产未暴露预览路由。
-- **未做**：T8（把 `playwright-core` 纳入 devDependencies / CI 浏览器方案）仍未执行；脚本当前依赖环境里的 `playwright-core`。
+- **T8 依赖治理（已完成）**：`playwright-core@1.64.1` 精确加入 devDependencies；`package.json` 新增 `ui:width`（夹具）与 `ui:width:preview`（真实预览）；`scripts/ui-width-check/README.md` 写明浏览器安装、可选参数与 GitHub Actions 方案；`npm run ui:width` 五档全 PASS；`npm ci --dry-run --ignore-scripts` 校验 lockfile 通过（干净安装可复现）；`playwright-core install chromium --dry-run` 能正确列出待下载浏览器。
+- **未做**：CI 实际接入（README 只提供方案，避免现在拉长流水线）；阶段 2 尚未开始。
 - **下一阶段**：阶段 2（编辑器中栏化）前置条件已具备；阶段 1 的预览壳与脚本保留，作为后续回归工具。
