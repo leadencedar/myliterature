@@ -1,5 +1,5 @@
 /*
- * UI v2 · 工作台作用域令牌（阶段 1）
+ * UI v2 · 工作台作用域令牌与空壳样式（阶段 1 / T3–T4）
  *
  * 只作用于 `.wb-scope`，不修改现有页面的阅读列、字号与颜色。
  * 阶段 2 起再决定哪些变量提升为全局语义令牌；在此之前保持作用域，
@@ -35,6 +35,222 @@
   --wb-prose-max: calc(40 * var(--wb-prose-size));
 }
 
+/* ---------------------------------------------------------------- 工作台壳 */
+
+.wb-shell {
+  display: flex;
+  height: 100dvh;
+  min-height: 100vh;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-paper);
+  color: var(--color-ink-900);
+}
+
+.wb-shell-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--color-ink-100);
+  background: var(--color-paper);
+}
+
+.wb-shell-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.wb-shell-app {
+  color: var(--color-ink-500);
+  font-size: 12px;
+}
+
+.wb-shell-work {
+  overflow: hidden;
+  color: var(--color-ink-900);
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-shell-toggle {
+  display: none;
+  flex: none;
+  margin-left: auto;
+  border: 1px solid var(--color-ink-100);
+  border-radius: 8px;
+  background: var(--color-paper-raised);
+  padding: 5px 10px;
+  color: var(--color-ink-700);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.wb-shell-body {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  grid-template-columns: var(--wb-rail-width) minmax(0, 1fr);
+}
+
+.wb-shell-rail {
+  min-width: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--color-ink-100);
+  background: var(--color-paper);
+  padding: 14px 12px;
+}
+
+.wb-shell-rail-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 8px 10px;
+  color: var(--color-ink-500);
+  font-size: 11px;
+}
+
+.wb-shell-chapters {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wb-shell-chapter {
+  display: flex;
+  width: 100%;
+  gap: 9px;
+  align-items: flex-start;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 9px 8px;
+  color: var(--color-ink-700);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wb-shell-chapter:hover {
+  background: var(--color-paper-sunken);
+}
+
+.wb-shell-chapter[aria-current='page'] {
+  background: var(--color-paper-sunken);
+  color: var(--color-ink-900);
+}
+
+.wb-shell-chapter-number {
+  padding-top: 1px;
+  color: var(--color-ink-300);
+  font-size: 11px;
+}
+
+.wb-shell-chapter-copy {
+  display: block;
+  min-width: 0;
+  flex: 1;
+}
+
+.wb-shell-chapter-copy strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.wb-shell-chapter-copy small {
+  display: block;
+  margin-top: 3px;
+  color: var(--color-ink-500);
+  font-size: 11px;
+}
+
+.wb-shell-rail-footer {
+  margin-top: 18px;
+  border-top: 1px solid var(--color-ink-100);
+  padding-top: 12px;
+  color: var(--color-ink-500);
+  font-size: 11px;
+}
+
+.wb-shell-editor {
+  min-width: 0;
+  overflow-y: auto;
+  background: var(--color-paper-raised);
+  padding: var(--wb-editor-pad);
+}
+
+/* --------------------------------------------------------------- 预览内容 */
+
+.wb-preview-editor {
+  max-width: var(--wb-prose-max);
+  margin: 0 auto;
+}
+
+.wb-preview-kicker {
+  color: var(--color-ink-500);
+  font-size: 11px;
+}
+
+.wb-preview-devnote {
+  margin-bottom: 16px;
+  border: 1px solid var(--color-ink-100);
+  border-radius: 8px;
+  background: var(--color-paper);
+  padding: 8px 10px;
+  color: var(--color-ink-500);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.wb-preview-title {
+  margin: 6px 0 0;
+  color: var(--color-ink-900);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.wb-preview-meta {
+  margin-top: 6px;
+  color: var(--color-ink-500);
+  font-size: 11px;
+}
+
+.wb-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 24px;
+  border-top: 1px solid var(--color-ink-100);
+  padding-top: 14px;
+}
+
+.wb-preview-actions button {
+  border: 1px solid var(--color-ink-100);
+  border-radius: 8px;
+  background: var(--color-paper);
+  padding: 7px 12px;
+  color: var(--color-ink-700);
+  font: inherit;
+  font-size: 12px;
+}
+
+.wb-preview-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 /*
  * 验收探针：正文占位段落。
  * 阶段 1 只用于确认令牌可读；阶段 2 的编辑器会复用同一组变量。
@@ -44,4 +260,71 @@
   font-family: var(--wb-prose-family);
   font-size: var(--wb-prose-size);
   line-height: var(--wb-prose-line);
+  color: var(--color-ink-900);
+}
+
+/* ------------------------------------------------- 1024–1279：章节栏浮层 */
+
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .wb-shell-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .wb-shell-toggle {
+    display: inline-flex;
+  }
+
+  .wb-shell-rail {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: var(--wb-nav-width);
+    z-index: 20;
+    width: var(--wb-rail-width);
+    visibility: hidden;
+    transform: translateX(-8px);
+    border-right: 1px solid var(--color-ink-100);
+    box-shadow: 0 0 0 1px var(--color-ink-100);
+  }
+
+  .wb-shell[data-rail-open='true'] .wb-shell-rail {
+    visibility: visible;
+    transform: none;
+  }
+}
+
+/* ------------------------------------- <1024：单栏 + 现有 AppNav 底部主导航 */
+
+@media (max-width: 1023px) {
+  .wb-shell-body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .wb-shell-toggle {
+    display: inline-flex;
+  }
+
+  .wb-shell-rail {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    width: 280px;
+    visibility: hidden;
+    transform: translateX(-8px);
+    border-right: 1px solid var(--color-ink-100);
+    box-shadow: 0 0 0 1px var(--color-ink-100);
+  }
+
+  .wb-shell[data-rail-open='true'] .wb-shell-rail {
+    visibility: visible;
+    transform: none;
+  }
+
+  .wb-shell-editor {
+    flex: 1;
+    padding-bottom: 88px;
+  }
 }
