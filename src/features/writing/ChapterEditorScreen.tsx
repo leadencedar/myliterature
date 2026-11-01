@@ -37,6 +37,13 @@ import {
 const AUTOSAVE_DELAY = 800;
 /** 「按规范检查」禁用原因的显示时长 */
 const CHECK_REASON_MS = 3000;
+/**
+ * 标题长度上限，与 ChapterSchema 的 title max(200) 保持一致。
+ *
+ * 超长标题会让整次 updateChapter 的 Zod 校验失败 —— 连同一 patch 里的正文都写不进去，
+ * 且重试永远不会成功。所以输入层必须先挡住。
+ */
+const TITLE_MAX_LENGTH = 200;
 
 type SaveState = 'saved' | 'pending' | 'saving' | 'error';
 
@@ -282,6 +289,18 @@ export function ChapterEditorScreen({
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 待保存的内容。放 ref 里以便离场时立即冲刷 */
   const pendingRef = useRef<Partial<Chapter> | null>(null);
+  /**
+   * 保存串行队列：防抖、Ctrl+S、AI 采用、退出冲刷都从这里排队。
+   * 同一时刻只允许一次 updateChapter 在飞 —— 否则后发请求可能带着更早的快照
+   * 覆盖先发请求，失败提示也会互相打架。
+   */
+  const saveChainRef = useRef<Promise<boolean>>(Promise.resolve(true));
+  /** 最近一次保存失败的原因：退出被拦时告诉作者到底怎么了 */
+  const [saveError, setSaveError] = useState<string | null>(null);
+  /** 退出时保存仍失败：编辑器不关闭，让作者选择重试还是放弃未保存修改 */
+  const [exitBlocked, setExitBlocked] = useState(false);
+  /** 作者明确放弃未保存修改：之后失败的保存不再把数据塞回队列 */
+  const discardRef = useRef(false);
 
   /**
    * 已计入当日产出的字数基准，以及本章是否已计过「完成一章」。
@@ -293,25 +312,57 @@ export function ChapterEditorScreen({
   const recordedWordsRef = useRef(countWords(chapter.content));
   const countedDoneRef = useRef(chapter.status === 'done');
 
-  const flush = useRef(async () => {
-    const patch = pendingRef.current;
-    if (!patch) return;
-    pendingRef.current = null;
-    setSaveState('saving');
-    try {
-      const saved = await repository.updateChapter(chapter.id, patch);
+  /**
+   * 待保存内容落盘，返回是否真正保存成功。
+   *
+   * 三条保证（对应 2026-11-01 审计 §3.1）：
+   * 1. 串行：所有调用方排队，前一次写完才轮到下一次，不会互相覆盖；
+   * 2. 失败可重试：写库失败时把本次 patch 合并回待保存队列（后来的输入优先），
+   *    Ctrl+S / 退出冲刷会再次尝试，不会「失败一次就永久丢」；
+   * 3. 正文与进度统计分开：进度写失败不改「保存失败」，也不推进字数基准，
+   *    下次保存会把这段增量补记回来。
+   */
+  const flush = useRef((): Promise<boolean> => {
+    const run = async (): Promise<boolean> => {
+      const patch = pendingRef.current;
+      if (!patch) return true;
+      pendingRef.current = null;
+      setSaveState('saving');
+      let saved: Chapter;
+      try {
+        saved = await repository.updateChapter(chapter.id, patch);
+      } catch (cause) {
+        if (!discardRef.current) {
+          // 把这次没写进去的数据放回队列；期间的新输入优先，别用旧 patch 覆盖
+          pendingRef.current = { ...patch, ...(pendingRef.current ?? {}) };
+        }
+        setSaveError(cause instanceof Error ? cause.message : '保存失败');
+        setSaveState('error');
+        return false;
+      }
+      // 正文已经落盘：下面这段失败不能再报「保存失败」，否则作者会以为正文丢了
+      setSaveError(null);
       const justCompleted = saved.status === 'done' && !countedDoneRef.current;
-      if (justCompleted) countedDoneRef.current = true;
-      await recordProgress(repository, saved.novelId, {
-        words: saved.wordCount - recordedWordsRef.current,
-        chaptersCompleted: justCompleted ? 1 : 0,
-      });
-      recordedWordsRef.current = saved.wordCount;
+      const wordsDelta = saved.wordCount - recordedWordsRef.current;
+      try {
+        await recordProgress(repository, saved.novelId, {
+          words: wordsDelta,
+          chaptersCompleted: justCompleted ? 1 : 0,
+        });
+        // 只有进度真的写成功才推进基准；否则下次保存会把这段增量重新记一次
+        recordedWordsRef.current = saved.wordCount;
+        if (justCompleted) countedDoneRef.current = true;
+      } catch {
+        // 进度记录失败不影响正文保存；基准不推进，下次保存补记
+      }
       invalidate();
       setSaveState('saved');
-    } catch {
-      setSaveState('error');
-    }
+      return true;
+    };
+    // 排到队尾；前一个任务无论成败都继续，一次失败不能卡死后续保存
+    const next = saveChainRef.current.then(run, run);
+    saveChainRef.current = next;
+    return next;
   });
 
   function scheduleSave(patch: Partial<Chapter>) {
@@ -336,6 +387,30 @@ export function ChapterEditorScreen({
     },
     [],
   );
+
+  /**
+   * 切后台 / 关页时再兜底冲刷一次。
+   *
+   * 卸载冲刷覆盖不到「页面被切走后进程被杀」：移动端来电、切 App 都是这条路径，
+   * 防抖计时器根本等不到。这里只能尽力而为（异步写不保证完成），
+   * 真正的一致性仍靠下一次打开时补写。
+   */
+  useEffect(() => {
+    function flushOnHide() {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = null;
+      void flush.current();
+    }
+    function onVisibilityChange() {
+      if (document.visibilityState === 'hidden') flushOnHide();
+    }
+    window.addEventListener('pagehide', flushOnHide);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('pagehide', flushOnHide);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, []);
 
   /** 立即落盘，不等防抖 */
   function saveNow() {
@@ -424,9 +499,31 @@ export function ChapterEditorScreen({
     // saveNow 只经由 ref 访问最新状态，因此挂一次就够
   }, []);
 
+  /**
+   * 返回：先冲刷待保存内容，保存失败就不关闭。
+   *
+   * 以前这里是「await flush 后无条件 onClose」，写库失败时会把未落盘的修改
+   * 直接带走。现在失败就留在编辑器里，由作者选择重试或明确放弃。
+   */
   async function closeWithFlush() {
     if (timerRef.current) clearTimeout(timerRef.current);
-    await flush.current();
+    const ok = await flush.current();
+    if (ok) {
+      onClose();
+      return;
+    }
+    setExitBlocked(true);
+  }
+
+  /** 保存一直失败时，作者明确选择丢弃未保存修改退出 */
+  async function discardAndClose() {
+    discardRef.current = true;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+    pendingRef.current = null;
+    setExitBlocked(false);
+    // 等在飞的保存落定，避免它在失败分支里又把数据塞回队列
+    await saveChainRef.current;
     onClose();
   }
 
@@ -672,10 +769,13 @@ export function ChapterEditorScreen({
           <input
             value={title}
             aria-label="章节标题"
+            maxLength={TITLE_MAX_LENGTH}
             placeholder={label}
             onChange={(event) => {
-              setTitle(event.target.value);
-              scheduleSave({ title: event.target.value });
+              // 双保险：浏览器 maxlength 之外再截一次，避免程序化输入把超长标题带进保存
+              const nextTitle = event.target.value.slice(0, TITLE_MAX_LENGTH);
+              setTitle(nextTitle);
+              scheduleSave({ title: nextTitle });
             }}
             className="min-w-0 flex-1 bg-transparent px-1 py-1.5 font-medium text-ink-900 placeholder:text-ink-300 focus:outline-none"
           />
@@ -890,6 +990,32 @@ export function ChapterEditorScreen({
           </details>
         ) : null}
       </header>
+
+      {/* 退出被拦：保存一直失败时不能一关了之，给作者「重试 / 放弃」两个出口 */}
+      {exitBlocked ? (
+        <div role="alert" className="reading-column px-3 pt-2 lg:px-1">
+          <div className="flex flex-wrap items-center gap-2 rounded-lg bg-accent-soft px-3 py-2 text-xs leading-relaxed text-ink-700">
+            <span className="flex-1">
+              还有内容没能保存到本地{saveError ? `（${saveError}）` : ''}。请重试，
+              或放弃这次未保存的修改再离开。
+            </span>
+            <button
+              type="button"
+              onClick={() => void closeWithFlush()}
+              className="shrink-0 rounded-full bg-paper-raised px-2.5 py-1 text-[0.6875rem] font-medium text-ink-700"
+            >
+              重试保存
+            </button>
+            <button
+              type="button"
+              onClick={() => void discardAndClose()}
+              className="shrink-0 rounded-full px-2.5 py-1 text-[0.6875rem] font-medium text-ink-500"
+            >
+              放弃修改并退出
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <textarea
         ref={textareaRef}
