@@ -12,6 +12,8 @@ interface WorkbenchShellProps {
   workTitle: string;
   chapters: readonly WorkbenchChapter[];
   railFooter?: ReactNode;
+  /** 点章节时由工作台父级决定（阶段 2：先 flush 再切章） */
+  onSelectChapter?: (chapterId: string) => void;
   children: ReactNode;
 }
 
@@ -23,7 +25,13 @@ interface WorkbenchShellProps {
  * - 1024–1279px：章节栏浮层，页头按钮打开，Esc 关闭并归还焦点；
  * - <1024px：单栏，章节栏浮层；全局导航由 AppShell 换成底部栏。
  */
-export function WorkbenchShell({ workTitle, chapters, railFooter, children }: WorkbenchShellProps) {
+export function WorkbenchShell({
+  workTitle,
+  chapters,
+  railFooter,
+  onSelectChapter,
+  children,
+}: WorkbenchShellProps) {
   const [railOpen, setRailOpen] = useState(false);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const railRef = useRef<HTMLElement>(null);
@@ -88,7 +96,10 @@ export function WorkbenchShell({ workTitle, chapters, railFooter, children }: Wo
                   type="button"
                   className="wb-shell-chapter"
                   aria-current={chapter.current ? 'page' : undefined}
-                  onClick={() => setRailOpen(false)}
+                  onClick={() => {
+                    setRailOpen(false);
+                    onSelectChapter?.(chapter.id);
+                  }}
                 >
                   <span className="wb-shell-chapter-number">
                     {String(index + 1).padStart(2, '0')}

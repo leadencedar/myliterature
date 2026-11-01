@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react';
 import type { ContextRequest } from '@/context/ContextBuilder';
 import type { NovelRepository } from '@/data/NovelRepository';
 import { useRepository } from '@/data/RepositoryProvider';
@@ -129,6 +129,18 @@ interface ChapterEditorScreenProps {
   /** 外传章节所属的外传；主线章节不传 */
   sideStory?: SideStory;
   onClose: () => void;
+  /**
+   * 呈现方式：默认 `modal`（现有全屏对话框）；阶段 2 起工作台中栏用 `inline`。
+   * inline 不声明 aria-modal，由外层工作台负责焦点与滚动。
+   */
+  presentation?: 'modal' | 'inline';
+  /** 给工作台父级用：切章前先 await flush()，失败则不要切 */
+  editorRef?: Ref<ChapterEditorHandle>;
+}
+
+/** 编辑器对外暴露的最小命令面（阶段 2：切章前保存）。 */
+export interface ChapterEditorHandle {
+  flush: () => Promise<boolean>;
 }
 
 /**
@@ -146,7 +158,10 @@ export function ChapterEditorScreen({
   context,
   sideStory,
   onClose,
+  presentation = 'modal',
+  editorRef,
 }: ChapterEditorScreenProps) {
+  const inline = presentation === 'inline';
   const repository = useRepository();
   const invalidate = useInvalidate();
   // 只用来判断「按规范检查」入口是否可用；真正的检查请求在面板里发
@@ -369,6 +384,14 @@ export function ChapterEditorScreen({
     saveChainRef.current = next;
     return next;
   });
+
+  useImperativeHandle(
+    editorRef,
+    () => ({
+      flush: () => flush.current(),
+    }),
+    [],
+  );
 
   function scheduleSave(patch: Partial<Chapter>) {
     pendingRef.current = { ...pendingRef.current, ...patch };
@@ -754,14 +777,19 @@ export function ChapterEditorScreen({
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
+      role={inline ? 'region' : 'dialog'}
+      aria-modal={inline ? undefined : 'true'}
       aria-label={
         sideStory
           ? `编辑外传《${sideStory.title}》第 ${chapter.index} 章`
           : `编辑第 ${chapter.index} 章`
       }
-      className="fixed inset-0 z-50 flex flex-col bg-paper"
+      data-testid={inline ? 'chapter-editor-inline' : 'chapter-editor-modal'}
+      className={
+        inline
+          ? 'flex h-full min-h-0 flex-col bg-paper'
+          : 'fixed inset-0 z-50 flex flex-col bg-paper'
+      }
     >
       {/* 头尾都收进与正文同宽的阅读列：桌面端把返回按钮甩到 1920px 最左边、
           正文却居中在中间，眼睛要来回横跨整个屏幕 */}

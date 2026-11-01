@@ -317,6 +317,7 @@ AppShell（全局导航：桌面侧栏 224 / 手机底部 Tab，均不变）
 每阶段独立分支、独立验收。`Chapter.note` 的 schema + DB 迁移 + 备份快照必须同一个 PR，且与 `src/data`/`src/proposal`/`src/llm` 的其它契约改动错开。
 
 > 阶段 1 任务拆分与验收脚本见 [UI-v2-阶段1-任务拆分与验收.md](UI-v2-阶段1-任务拆分与验收.md)（含 `scripts/ui-width-check.mjs` 与静态夹具；接入后跑 `--url http://127.0.0.1:5173/__workbench`）。
+> 阶段 2 最小验证执行记录见 [UI-v2-阶段2-编辑器内联-执行记录.md](UI-v2-阶段2-编辑器内联-执行记录.md)（dev-only `/write?inline-editor=1`，默认 `/write` 未改）。
 
 ## 12. 验收清单（P0）
 
