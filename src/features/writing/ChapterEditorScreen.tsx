@@ -138,9 +138,13 @@ interface ChapterEditorScreenProps {
   editorRef?: Ref<ChapterEditorHandle>;
 }
 
-/** 编辑器对外暴露的最小命令面（阶段 2：切章前保存）。 */
+/** 编辑器对外暴露的最小命令面（阶段 2：切章/离开前保存）。 */
 export interface ChapterEditorHandle {
   flush: () => Promise<boolean>;
+  /** 是否还有未落盘内容（用于路由离开守卫） */
+  hasPendingChanges: () => boolean;
+  /** 明确放弃待保存内容（守卫里选择「放弃修改并离开」时用） */
+  discard: () => void;
 }
 
 /**
@@ -389,6 +393,15 @@ export function ChapterEditorScreen({
     editorRef,
     () => ({
       flush: () => flush.current(),
+      hasPendingChanges: () => pendingRef.current !== null,
+      discard: () => {
+        discardRef.current = true;
+        if (timerRef.current) {
+          clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        pendingRef.current = null;
+      },
     }),
     [],
   );

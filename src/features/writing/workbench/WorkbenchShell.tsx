@@ -10,6 +10,8 @@ export interface WorkbenchChapter {
 
 interface WorkbenchShellProps {
   workTitle: string;
+  /** 章节栏标题；默认「章节」，预览壳可传卷名 */
+  railTitle?: string;
   chapters: readonly WorkbenchChapter[];
   railFooter?: ReactNode;
   /** 点章节时由工作台父级决定（阶段 2：先 flush 再切章） */
@@ -27,6 +29,7 @@ interface WorkbenchShellProps {
  */
 export function WorkbenchShell({
   workTitle,
+  railTitle = '章节',
   chapters,
   railFooter,
   onSelectChapter,
@@ -86,7 +89,7 @@ export function WorkbenchShell({
           aria-label="章节"
         >
           <div className="wb-shell-rail-heading">
-            <span>第一卷 · 潮汐</span>
+            <span>{railTitle}</span>
             <span>{chapters.length} 章</span>
           </div>
           <ol className="wb-shell-chapters">

@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useActiveNovel } from '@/app/store/useActiveNovel';
 import { toLocalDate } from '@/domain/primitives';
@@ -2021,6 +2022,40 @@ describe('阶段 2 · 内联编辑器（dev 预览）', () => {
     await waitFor(async () => {
       const chapters = await harness.repository.listChapters(novel.id);
       expect(chapters[0]?.content).toBe('别丢。');
+    });
+  });
+
+  it('有未保存内容时离开写作页，先保存再导航', async () => {
+    await harness.repository.createChapter(novel.id, {
+      title: '第1章 雪夜',
+      outlineNodeId: chapterNode.id,
+    });
+
+    const user = userEvent.setup();
+    harness.renderUI(
+      <>
+        <a href="/shelf">去书架</a>
+        <Routes>
+          <Route path="/write" element={<WritingPage />} />
+          <Route path="/shelf" element={<p>书架占位</p>} />
+        </Routes>
+      </>,
+      '/write?inline-editor=1',
+    );
+    await waitForLoaded();
+    await user.click(await screen.findByRole('button', { name: '继续写第 1 章' }));
+    await screen.findByLabelText('章节正文');
+    await user.type(screen.getByLabelText('章节正文'), '离开前保存。');
+
+    // 点站内链接：守卫拦截，先弹出确认
+    await user.click(screen.getByRole('link', { name: '去书架' }));
+    const dialog = await screen.findByRole('dialog', { name: '还有内容没保存' });
+    await user.click(within(dialog).getByRole('button', { name: '保存并离开' }));
+
+    expect(await screen.findByText('书架占位')).toBeInTheDocument();
+    await waitFor(async () => {
+      const chapters = await harness.repository.listChapters(novel.id);
+      expect(chapters[0]?.content).toBe('离开前保存。');
     });
   });
 });

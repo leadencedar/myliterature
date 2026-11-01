@@ -5,7 +5,7 @@ import type { ContextRequest } from '@/context/ContextBuilder';
 import { useRepository } from '@/data/RepositoryProvider';
 import { useInvalidate, useRepoQuery } from '@/data/useRepoQuery';
 import type { Chapter, ChapterSummary, Novel, OutlineNode, SideStory } from '@/domain/schema';
-import { chaptersOfTrack, sideStoryLabel } from '@/domain/sideStory';
+import { chapterLabel, chaptersOfTrack, sideStoryLabel } from '@/domain/sideStory';
 import { Button, IconButton } from '@/ui/Button';
 import { EmptyState, Page, Section } from '@/ui/Page';
 import { useAnyModalOpen } from '@/ui/Sheet';
@@ -324,12 +324,23 @@ function WritingContent({ novel }: { novel: Novel }) {
   );
 
   if (inlineEditorPreview && editingChapter && editorContext && !editorOrphaned) {
-    const inlineChapters = mainChapters.map((chapter) => ({
-      id: chapter.id,
-      title: chapter.title || `第 ${chapter.index} 章`,
-      meta: `${chapter.status === 'done' ? '已完成' : '草稿'} · ${formatWordCount(chapter.wordCount)}`,
-      current: chapter.id === editingChapter.id,
-    }));
+    const inlineChapters = chapters.map((chapter) => {
+      const story = chapter.sideStoryId
+        ? sideStories.find((item) => item.id === chapter.sideStoryId)
+        : undefined;
+      // 标题里已经有章号的作品不再重复拼「第 N 章」；外传则带上外传名
+      const title = chapter.title
+        ? story
+          ? `${sideStoryLabel(story)} · ${chapter.title}`
+          : chapter.title
+        : chapterLabel(chapter, sideStories);
+      return {
+        id: chapter.id,
+        title,
+        meta: `${chapter.status === 'done' ? '已完成' : '草稿'} · ${formatWordCount(chapter.wordCount)}`,
+        current: chapter.id === editingChapter.id,
+      };
+    });
 
     return (
       <Suspense
@@ -342,6 +353,7 @@ function WritingContent({ novel }: { novel: Novel }) {
         {InlineWorkbenchPreview ? (
           <InlineWorkbenchPreview
             workTitle={novel.title}
+            railTitle="章节"
             chapters={inlineChapters}
             railFooter={
               <p>

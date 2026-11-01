@@ -17,6 +17,9 @@
 | 章节选择回调   | `src/features/writing/workbench/WorkbenchShell.tsx`         | 新增 `onSelectChapter`，由父级决定切章顺序                                                                                          |
 | 开发入口       | `src/features/writing/WritingPage.tsx`                      | `/write?inline-editor=1`（仅 DEV / 测试环境）；懒加载内联组件，生产构建摇掉；默认路径不变                                           |
 | 测试           | `src/features/writing/ChapterEditor.test.tsx`               | 新增 2 个用例：内联 region + 章节栏切章（含 flush 后正文落库）；内联模式保存失败退出被拦截、重试成功后才离开                        |
+| 排版适配       | `ChapterEditorScreen.tsx`、`workbench.css`                  | inline 下正文用工作台令牌：黑体 17 / 1.85、上限 680、标题 24px；modal 仍沿用原排版                                                  |
+| 路由离开守卫   | `InlineWorkbenchPreview.tsx`                                | 站内链接点击先 `flush()`，失败留在页面并提示；`beforeunload` 兜底关闭/刷新；浏览器后退未拦截                                        |
+| 章节栏数据     | `WritingPage.tsx`、`WorkbenchShell.tsx`                     | 章节栏标题可配置；列出全部章节（含外传前缀），不再只列主线                                                                          |
 
 设计取舍：
 
@@ -36,20 +39,22 @@ npm run dev
 
 ## 3. 验证结果
 
-- **单元测试**：`ChapterEditor.test.tsx` 83 个用例全过（含新增 2 个内联用例）；全仓 `2601 passed / 5 skipped`。
+- **单元测试**：`ChapterEditor.test.tsx` 84 个用例全过（含新增 3 个内联用例）；全仓 `2602 passed / 5 skipped`。
 - **类型/格式**：`tsc --noEmit` 0；`format:check` 0。
-- **生产隔离**：`npm run build` 0；`dist` 中搜索 `workbench-root` / `InlineWorkbenchPreview` / `inline-editor` 无命中 → 预览代码未进生产包。
-- **真实页面冒烟**（Chromium 1280×900，临时 IndexedDB）：新建作品 → 新增大纲节点 → 「写这一章」→ 内联编辑器出现；`[data-testid="chapter-editor-inline"]` 1 个、`role="dialog"` 0 个、无 console/page error；章节栏显示当前章，右栏暂无（阶段 3）。
-- **切章与退出**（测试覆盖）：内联编辑器内输入后点章节栏另一章，先 flush 再切，前一章正文落库；保存失败时点「返回」出现退出拦截，重试成功后才离开。
+- **生产隔离**：`npm run build` 0；`dist` 中搜索 `workbench-root` / `InlineWorkbenchPreview` / `inline-editor` 均无命中 → 预览代码未进生产包。
+- **真实页面冒烟**（Chromium 1280×900，临时 IndexedDB）：新建作品 → 新增大纲节点 → 「写这一章」→ 内联编辑器出现；`[data-testid="chapter-editor-inline"]` 1 个、`role="dialog"` 0 个、无 console/page error。
+- **排版实测**（同一次冒烟）：内联编辑器 textarea 宽 **680px**、字号 **17px**、行高 **31.45px（1.85）**、约 **40.0 字/行**；标题 24px；工作台壳宽度验收脚本仍全 PASS。
+- **移动**（390×844，强制 `inline-editor=1`）：内联壳单栏、无横向滚动、底部导航可见；默认移动端仍走全屏编辑器。
+- **切章/退出/离开**（测试覆盖）：切章前 flush 后正文落库；保存失败退出被拦截、重试成功后才离开；有未保存内容时点站内链接先弹确认，「保存并离开」后再导航。
 
 ## 4. 当前边界（未做）
 
 - 仍是 **dev-only 预览**：默认 `/write`、`Page` 信息架构、全局导航都未改；阶段 3 才把工作台壳接进真实写作页。
-- 编辑器排版仍沿用现有实现（宋体 17/1.9，桌面 19/2.1）；v2 的黑体 17/1.85 与 680 上限尚未落到编辑器（阶段 6 与字体设置一起做）。
+- 路由离开守卫只拦截**站内链接点击**（主导航、页面内链）与关闭/刷新；浏览器后退、代码内 `navigate()` 还没有统一拦截，阶段 3 需要补 React Router 数据路由或等价守卫。
 - 没有拆出 `ChapterEditorBody` 独立组件：现阶段用 prop 切换承载即可，等阶段 3 需要右侧面板共享状态时再评估拆分。
-- 路由离开（切 Tab、后退）没有阻塞式 flush 提示；当前依赖编辑器卸载冲刷，未达到「离开前 await」的最终要求。
-- 工作台章节栏只列主线章节；外传章节打开时不在栏内高亮，阶段 3 补分组。
-- 移动端内联模式未在真机验证；移动端默认仍是全屏编辑器。
+- 章节栏已列出外传章节，但没有分组表头与「新建外传」入口；阶段 3 接管写作页 IA 时补。
+- 移动端内联模式只做了 390px 冒烟，未在真机验证键盘/安全区；默认移动端仍是全屏编辑器。
+- 编辑器与右栏还没有联动（右栏是阶段 3）。
 
 ## 5. 下一步（阶段 3）
 

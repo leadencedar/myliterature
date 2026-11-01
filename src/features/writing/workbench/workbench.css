@@ -190,6 +190,23 @@
   padding: var(--wb-editor-pad);
 }
 
+.wb-scope .reading-column {
+  max-width: var(--wb-prose-max);
+}
+
+/* 内联编辑器沿用工作台令牌：黑体 17 / 1.85、正文上限 680 */
+.wb-scope .reading-column.font-reading,
+.wb-scope textarea.reading-column {
+  font-family: var(--wb-prose-family);
+  font-size: var(--wb-prose-size);
+  line-height: var(--wb-prose-line);
+}
+
+.wb-scope .reading-column > input[aria-label='章节标题'] {
+  font-size: 24px;
+  font-weight: 600;
+}
+
 /* --------------------------------------------------------------- 预览内容 */
 
 .wb-preview-editor {
