@@ -80,6 +80,12 @@ try {
     });
 
     await page.goto(target, { waitUntil: 'load', timeout: 30_000 });
+    // 真实页面有路由级 lazy chunk：先等空壳挂载，再测尺寸
+    try {
+      await page.waitForSelector(SELECTORS.root, { timeout: 10_000 });
+    } catch {
+      errors.push(`pageerror: 10s 内未出现 ${SELECTORS.root}`);
+    }
     await page.evaluate(async () => {
       if (document.fonts?.ready) await document.fonts.ready;
     });

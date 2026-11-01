@@ -215,13 +215,26 @@ UI v2 阶段 1 · 宽度验收
 
 ---
 
-## 10. 执行记录（2026-11-01，T0–T2）
+## 10. 执行记录（2026-11-01，T0–T6）
 
-- **分支**：`feat/ui-v2-stage1`，基于 `78ed583`；计划/规格/验收工具已先行提交（`docs(ui-v2): 阶段1 计划、v2 规格与宽度验收工具`）。
+- **分支**：`feat/ui-v2-stage1`，基于 `78ed583`。
 - **T0 基线**：`npm run test:run` → 132 个测试文件（131 passed / 1 skipped）、2599 passed / 5 skipped，exit 0。此前文档里「2478 用例」是静态 `it(` 计数，低于实际运行数，以本次运行为准。
-- **T1 令牌**：新增 `src/features/writing/workbench/workbench.css`；Chromium 读到的作用域变量：`--wb-prose-size: 17px`、`--wb-prose-line: 1.85`、`--wb-prose-max: calc(40 * 17px)`、`--wb-rail-width: 240px`、`--wb-nav-width: 224px`。
-- **T2 预览路由**：新增 `src/features/writing/workbench/WorkbenchPreview.tsx`；`AppShell.tsx` 仅在 `import.meta.env.DEV` 下注册 `/__workbench`（动态 import + 三元守卫，不加入主导航）。
-- **T2 实测**（Chromium 1280×900）：正文探针 680px 宽、17px 字号、31.45px 行高（1.85）、40.0 字/行；无 console/page error；`/write` 仍返回 200；预览页有 `#main` 与 skip-link。
-- **回归**：`format:check` exit 0；`tsc --noEmit`（typecheck）exit 0；`npm run test:run` 仍为 2599 passed / 5 skipped；`npm run build` exit 0；`grep -R "__workbench\|阶段 1 预览\|dev preview" dist` 无命中 → 生产构建未暴露预览路由。
-- **未做**：T3 空壳与 T4 响应式尚未接入，因此 `scripts/ui-width-check.mjs` 暂时不能对 `/__workbench` 全量 PASS（缺章节栏/编辑器壳）；等 T3/T4 完成后再跑脚本验收。
-- **下一批**：T3（页头/章节栏/编辑器占位）→ T4（五档响应式）→ T5（脚本接入）。
+- **T1 令牌**：`src/features/writing/workbench/workbench.css`；Chromium 读到 `--wb-prose-size: 17px`、`--wb-prose-line: 1.85`、`--wb-prose-max: calc(40 * 17px)`、`--wb-rail-width: 240px`、`--wb-nav-width: 224px`。
+- **T2 预览路由**：`WorkbenchPreview` 仅在 `import.meta.env.DEV` 下注册 `/__workbench`（动态 import + 三元守卫，不加入主导航）。
+- **T3 空壳**：新增 `WorkbenchShell`（页头 / 章节栏 / 编辑器占位 / `main#main` / skip-link）；预览页使用固定示例章节与正文，不读仓库、不调模型、不写数据。
+- **T4 响应式**：≥1280 章节栏常驻 240；1024–1279 浮层 + 页头「章节」按钮；<1024 单栏、全局导航由 AppShell 变为底部栏；`h-dvh` 壳、栏内独立滚动。实测 1100px：默认收起 → 点开可见 → 焦点进入首章 → Esc 关闭 → 焦点回按钮。
+- **T5 脚本接入**：`node scripts/ui-width-check.mjs --url http://127.0.0.1:5173/__workbench` 全 PASS：
+
+  | 视口 | 布局        | 正文宽 | 字号/行高   | 字/行 | 横向滚动 | 结果 |
+  | ---- | ----------- | ------ | ----------- | ----- | -------- | ---- |
+  | 390  | 单栏·底部栏 | 342px  | 17px / 1.85 | 20.1  | 无       | PASS |
+  | 768  | 单栏·底部栏 | 680px  | 17px / 1.85 | 40.0  | 无       | PASS |
+  | 1024 | 双栏·栏浮层 | 680px  | 17px / 1.85 | 40.0  | 无       | PASS |
+  | 1280 | 双栏·栏常驻 | 680px  | 17px / 1.85 | 40.0  | 无       | PASS |
+  | 1440 | 双栏·栏常驻 | 680px  | 17px / 1.85 | 40.0  | 无       | PASS |
+
+  脚本同时修正了真实页面的 lazy chunk 等待（先等 `workbench-root` 挂载，再测量）。
+
+- **T6 回归与生产隔离**：`format:check` 0、`tsc --noEmit` 0、`test:run` 2599 passed / 5 skipped、`build` 0；`grep -R "__workbench\|阶段 1 预览\|dev preview" dist` 无命中 → 生产未暴露预览路由。
+- **未做**：T8（把 `playwright-core` 纳入 devDependencies / CI 浏览器方案）仍未执行；脚本当前依赖环境里的 `playwright-core`。
+- **下一阶段**：阶段 2（编辑器中栏化）前置条件已具备；阶段 1 的预览壳与脚本保留，作为后续回归工具。
