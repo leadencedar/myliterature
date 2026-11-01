@@ -1,0 +1,47 @@
+/*
+ * UI v2 · 工作台作用域令牌（阶段 1）
+ *
+ * 只作用于 `.wb-scope`，不修改现有页面的阅读列、字号与颜色。
+ * 阶段 2 起再决定哪些变量提升为全局语义令牌；在此之前保持作用域，
+ * 便于整段回滚。
+ *
+ * 对应规格：docs/UI-v2-P0-设计规格.md §3.1 / §11 阶段 1。
+ * 正文 40 字/行 = 40 × 字号；默认黑体 17px / 1.85，上限 680px。
+ */
+.wb-scope {
+  /* 字体：工具区/正文默认黑体；宋体作为后续设置项的组合 */
+  --wb-font-sans:
+    -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    'Noto Sans SC', sans-serif;
+  --wb-font-serif: 'Songti SC', 'Source Han Serif SC', 'Noto Serif SC', STSong, Georgia, serif;
+
+  /* 正文排版：黑体默认；宋体组合留给阶段 6 的设置 */
+  --wb-prose-family: var(--wb-font-sans);
+  --wb-prose-size: 17px;
+  --wb-prose-line: 1.85;
+  --wb-prose-max: calc(40 * var(--wb-prose-size));
+
+  /* 布局：导航 224 / 章节栏 240 / 编辑区内边距 24 */
+  --wb-nav-width: 224px;
+  --wb-rail-width: 240px;
+  --wb-editor-pad: 24px;
+}
+
+/* 宋体组合：只在将来接设置时使用；阶段 1 预览可通过 data-font="serif" 手动验证 */
+.wb-scope[data-font='serif'] {
+  --wb-prose-family: var(--wb-font-serif);
+  --wb-prose-size: 18px;
+  --wb-prose-line: 2.05;
+  --wb-prose-max: calc(40 * var(--wb-prose-size));
+}
+
+/*
+ * 验收探针：正文占位段落。
+ * 阶段 1 只用于确认令牌可读；阶段 2 的编辑器会复用同一组变量。
+ */
+.wb-prose-probe {
+  max-width: var(--wb-prose-max);
+  font-family: var(--wb-prose-family);
+  font-size: var(--wb-prose-size);
+  line-height: var(--wb-prose-line);
+}
