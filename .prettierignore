@@ -3,3 +3,6 @@ dist
 coverage
 package-lock.json
 .DS_Store
+# .agents 是历史工作记录（计划、评审、验收报告）与一次性验收脚本，不是产品源码。
+# 其中的可执行脚本如要长期维护，应先迁移到 scripts/ 或测试目录，再纳入格式检查。
+.agents
