@@ -62,34 +62,22 @@ node scripts/ui-width-check.mjs --no-fail
 | `--json <path>`                      | 输出 JSON 结果                                   |
 | `--no-fail`                          | 有失败也返回 0，只记录                           |
 
-## CI 方案（可选，尚未接入仓库 CI）
+## CI（已接入）
 
-本仓库 CI 目前只跑 format / typecheck / test / build；宽度验收需要浏览器与开发服务器，建议作为独立 job：
+`.github/workflows/ci.yml` 新增独立 job **UI 宽度验收（`ui-width`）**，在 PR 与手动触发时运行：
 
-```yaml
-ui-width:
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
-      with:
-        node-version-file: .nvmrc
-        cache: npm
-    - run: npm ci
-    - run: npx playwright-core install --with-deps chromium
-    - run: npm run ui:width # 夹具干跑
-    - name: 真实预览页
-      run: |
-        npm run dev -- --host 127.0.0.1 --port 5173 > /tmp/vite.log 2>&1 &
-        for i in $(seq 1 30); do
-          curl -sf http://127.0.0.1:5173/__workbench > /dev/null && break
-          sleep 1
-        done
-        npm run ui:width:preview
+1. `npm ci`；
+2. 按 `package-lock.json` 缓存 `~/.cache/ms-playwright`，执行 `npx playwright-core install --with-deps chromium`；
+3. `npm run ui:width` 跑夹具验收；
+4. 启动 dev server，等 `/__workbench` 可访问后跑 `npm run ui:width:preview`。
+
+任一步失败会阻断 PR。缓存 key 随 lockfile 变化自动失效；`/__workbench` 只在开发环境存在，所以真实页面验收用 dev server，不依赖生产构建。
+
+本地没有浏览器时同样按上面的方式安装；已有浏览器时可用 `PLAYWRIGHT_CHROMIUM_PATH` 指向可执行文件：
+
+```bash
+export PLAYWRIGHT_CHROMIUM_PATH="/path/to/Google Chrome for Testing"
+npm run ui:width:preview
 ```
 
-说明：
-
-- `/__workbench` 只在 `import.meta.env.DEV` 下注册，所以真实预览要在开发服务器上测；生产构建不包含该路由。
-- CI 缓存 `~/.cache/ms-playwright` 可减少浏览器重复下载；是否接入 CI 由后续任务决定。
-- 本文件与脚本是 QA 工具，不改变产品运行时代码。
+说明：本文件与脚本是 QA 工具，不改变产品运行时代码。

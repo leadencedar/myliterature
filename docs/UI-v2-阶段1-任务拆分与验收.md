@@ -236,6 +236,7 @@ UI v2 阶段 1 · 宽度验收
   脚本同时修正了真实页面的 lazy chunk 等待（先等 `workbench-root` 挂载，再测量）。
 
 - **T6 回归与生产隔离**：`format:check` 0、`tsc --noEmit` 0、`test:run` 2599 passed / 5 skipped、`build` 0；`grep -R "__workbench\|阶段 1 预览\|dev preview" dist` 无命中 → 生产未暴露预览路由。
-- **T8 依赖治理（已完成）**：`playwright-core@1.64.1` 精确加入 devDependencies；`package.json` 新增 `ui:width`（夹具）与 `ui:width:preview`（真实预览）；`scripts/ui-width-check/README.md` 写明浏览器安装、可选参数与 GitHub Actions 方案；`npm run ui:width` 五档全 PASS；`npm ci --dry-run --ignore-scripts` 校验 lockfile 通过（干净安装可复现）；`playwright-core install chromium --dry-run` 能正确列出待下载浏览器。
-- **未做**：CI 实际接入（README 只提供方案，避免现在拉长流水线）；阶段 2 尚未开始。
+- **T8 依赖治理（已完成）**：`playwright-core@1.64.1` 精确加入 devDependencies；`package.json` 新增 `ui:width`（夹具）与 `ui:width:preview`（真实预览）；`scripts/ui-width-check/README.md` 写明浏览器安装、可选参数与 CI 方案；`.github/workflows/ci.yml` 新增 `ui-width` job（浏览器缓存 + 夹具 + 真实预览）；`npm run ui:width` 五档全 PASS；`npm ci --dry-run --ignore-scripts` 校验 lockfile 通过（干净安装可复现）；`playwright-core install chromium --dry-run` 能正确列出待下载浏览器。
+- **CI 接入**：`.github/workflows/ci.yml` 新增 `ui-width` job（PR / 手动触发，浏览器缓存 + 夹具 + dev server 真实预览）；本地已用等价命令验证通过，尚未在 GitHub 远端实际跑过（下一次 PR 会验证）。
+- **未做**：阶段 2 尚未开始。
 - **下一阶段**：阶段 2（编辑器中栏化）前置条件已具备；阶段 1 的预览壳与脚本保留，作为后续回归工具。

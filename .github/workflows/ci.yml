@@ -1,4 +1,4 @@
-# 合并前的质量门禁：格式检查、类型检查、全量测试、生产构建。
+# 合并前的质量门禁：格式检查、类型检查、全量测试、生产构建、UI 宽度验收。
 #
 # 与 deploy.yml 分工：部署只在 main 推送时跑；这里是 PR / 手动触发的提前反馈，
 # 让问题在合并前暴露，而不是等部署流水线红了才发现。
@@ -45,3 +45,55 @@ jobs:
 
       - name: 构建
         run: npm run build
+
+  ui-width:
+    name: UI 宽度验收
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 配置 Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      # Playwright 浏览器按 package-lock 缓存；命中后 install 只补齐 apt 依赖
+      - name: 缓存 Playwright 浏览器
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: 安装 Chromium
+        run: npx playwright-core install --with-deps chromium
+
+      - name: 夹具宽度验收
+        run: npm run ui:width
+
+      # /__workbench 只在开发环境存在；真实页面验收必须起 dev server
+      - name: 真实预览宽度验收
+        run: |
+          npm run dev -- --host 127.0.0.1 --port 5173 > /tmp/vite.log 2>&1 &
+          VITE_PID=$!
+          trap 'kill "$VITE_PID" 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:5173/__workbench > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          if ! curl -sf http://127.0.0.1:5173/__workbench > /dev/null; then
+            echo "开发服务器未就绪："
+            cat /tmp/vite.log
+            exit 1
+          fi
+
+          npm run ui:width:preview
