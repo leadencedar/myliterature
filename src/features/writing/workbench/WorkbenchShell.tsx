@@ -8,11 +8,17 @@ export interface WorkbenchChapter {
   current?: boolean;
 }
 
+export interface WorkbenchChapterGroup {
+  key: string;
+  title: string;
+  chapters: readonly WorkbenchChapter[];
+}
+
 interface WorkbenchShellProps {
   workTitle: string;
   /** 章节栏标题；默认「章节」，预览壳可传卷名 */
   railTitle?: string;
-  chapters: readonly WorkbenchChapter[];
+  groups: readonly WorkbenchChapterGroup[];
   railFooter?: ReactNode;
   /** 点章节时由工作台父级决定（阶段 2：先 flush 再切章） */
   onSelectChapter?: (chapterId: string) => void;
@@ -30,12 +36,13 @@ interface WorkbenchShellProps {
 export function WorkbenchShell({
   workTitle,
   railTitle = '章节',
-  chapters,
+  groups,
   railFooter,
   onSelectChapter,
   children,
 }: WorkbenchShellProps) {
   const [railOpen, setRailOpen] = useState(false);
+  const totalChapters = groups.reduce((sum, group) => sum + group.chapters.length, 0);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const railRef = useRef<HTMLElement>(null);
 
@@ -90,31 +97,36 @@ export function WorkbenchShell({
         >
           <div className="wb-shell-rail-heading">
             <span>{railTitle}</span>
-            <span>{chapters.length} 章</span>
+            <span>{totalChapters} 章</span>
           </div>
-          <ol className="wb-shell-chapters">
-            {chapters.map((chapter, index) => (
-              <li key={chapter.id}>
-                <button
-                  type="button"
-                  className="wb-shell-chapter"
-                  aria-current={chapter.current ? 'page' : undefined}
-                  onClick={() => {
-                    setRailOpen(false);
-                    onSelectChapter?.(chapter.id);
-                  }}
-                >
-                  <span className="wb-shell-chapter-number">
-                    {String(index + 1).padStart(2, '0')}
-                  </span>
-                  <span className="wb-shell-chapter-copy">
-                    <strong>{chapter.title}</strong>
-                    <small>{chapter.meta}</small>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ol>
+          {groups.map((group) => (
+            <section key={group.key} className="wb-shell-group" aria-label={group.title}>
+              <h3 className="wb-shell-group-title">{group.title}</h3>
+              <ol className="wb-shell-chapters">
+                {group.chapters.map((chapter, index) => (
+                  <li key={chapter.id}>
+                    <button
+                      type="button"
+                      className="wb-shell-chapter"
+                      aria-current={chapter.current ? 'page' : undefined}
+                      onClick={() => {
+                        setRailOpen(false);
+                        onSelectChapter?.(chapter.id);
+                      }}
+                    >
+                      <span className="wb-shell-chapter-number">
+                        {String(index + 1).padStart(2, '0')}
+                      </span>
+                      <span className="wb-shell-chapter-copy">
+                        <strong>{chapter.title}</strong>
+                        <small>{chapter.meta}</small>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          ))}
           {railFooter ? <div className="wb-shell-rail-footer">{railFooter}</div> : null}
         </aside>
 

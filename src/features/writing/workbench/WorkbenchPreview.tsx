@@ -18,8 +18,8 @@ export function WorkbenchPreview() {
   return (
     <WorkbenchShell
       workTitle="雾港来信"
-      railTitle="第一卷 · 潮汐"
-      chapters={SAMPLE_CHAPTERS}
+      railTitle="章节"
+      groups={[{ key: 'main', title: '第一卷 · 潮汐', chapters: SAMPLE_CHAPTERS }]}
       railFooter={
         <p>
           作品字数 144

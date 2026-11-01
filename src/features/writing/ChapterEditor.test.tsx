@@ -2058,4 +2058,22 @@ describe('阶段 2 · 内联编辑器（dev 预览）', () => {
       expect(chapters[0]?.content).toBe('离开前保存。');
     });
   });
+
+  it('外传章节在章节栏按分组显示', async () => {
+    await harness.repository.createChapter(novel.id, {
+      title: '第1章 雪夜',
+      outlineNodeId: chapterNode.id,
+    });
+    const story = await harness.repository.createSideStory(novel.id, { title: '青冥旧事' });
+    await harness.repository.createChapter(novel.id, { title: '渡口', sideStoryId: story.id });
+
+    const user = userEvent.setup();
+    harness.renderUI(<WritingPage />, '/write?inline-editor=1');
+    await waitForLoaded();
+    await user.click(await screen.findByRole('button', { name: '继续写第 1 章' }));
+    await screen.findByLabelText('章节正文');
+
+    expect(screen.getByRole('heading', { name: '外传·青冥旧事' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /渡口/u })).toBeInTheDocument();
+  });
 });

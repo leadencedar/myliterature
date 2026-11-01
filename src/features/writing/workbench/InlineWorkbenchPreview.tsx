@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChapterEditorScreen, type ChapterEditorHandle } from '../ChapterEditorScreen';
-import { WorkbenchShell, type WorkbenchChapter } from './WorkbenchShell';
+import { WorkbenchShell, type WorkbenchChapterGroup } from './WorkbenchShell';
 
 type EditorProps = ComponentProps<typeof ChapterEditorScreen>;
 
 interface InlineWorkbenchPreviewProps {
   workTitle: string;
   railTitle?: string;
-  chapters: readonly WorkbenchChapter[];
+  groups: readonly WorkbenchChapterGroup[];
   railFooter?: ReactNode;
   /** 复用编辑器全部 props；presentation / editorRef 由本组件接管 */
   editor: Omit<EditorProps, 'presentation' | 'editorRef'>;
@@ -27,7 +27,7 @@ interface InlineWorkbenchPreviewProps {
 export function InlineWorkbenchPreview({
   workTitle,
   railTitle,
-  chapters,
+  groups,
   railFooter,
   editor,
   onSwitchChapter,
@@ -123,7 +123,7 @@ export function InlineWorkbenchPreview({
       <WorkbenchShell
         workTitle={workTitle}
         railTitle={railTitle}
-        chapters={chapters}
+        groups={groups}
         railFooter={railFooter}
         onSelectChapter={(chapterId) => void switchChapter(chapterId)}
       >
