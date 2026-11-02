@@ -400,7 +400,7 @@ describe('通用人物开局 → 沉淀为外传 → 写这一章（design-adden
     await user.click(
       await within(card).findByRole('button', { name: '继续写外传《雾中另一程》第 1 章' }),
     );
-    await screen.findByRole('dialog', { name: '编辑外传《雾中另一程》第 1 章' });
+    await screen.findByRole('region', { name: '编辑外传《雾中另一程》第 1 章' });
     const dialog = await openGenerate(user, '互动推演 · 第 2–3 步原文');
     expect(within(dialog).getByText('分叉之前的经过')).toBeInTheDocument();
 

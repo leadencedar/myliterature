@@ -22,6 +22,8 @@ interface WorkbenchShellProps {
   railFooter?: ReactNode;
   /** 点章节时由工作台父级决定（阶段 2：先 flush 再切章） */
   onSelectChapter?: (chapterId: string) => void;
+  /** 右栏「本章」；传入后页头出现「本章」按钮 */
+  sidePanel?: (close: () => void) => ReactNode;
   children: ReactNode;
 }
 
@@ -39,15 +41,24 @@ export function WorkbenchShell({
   groups,
   railFooter,
   onSelectChapter,
+  sidePanel,
   children,
 }: WorkbenchShellProps) {
   const [railOpen, setRailOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
   const totalChapters = groups.reduce((sum, group) => sum + group.chapters.length, 0);
   const toggleRef = useRef<HTMLButtonElement>(null);
+  const panelToggleRef = useRef<HTMLButtonElement>(null);
   const railRef = useRef<HTMLElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+
+  function closePanel() {
+    setPanelOpen(false);
+    window.requestAnimationFrame(() => panelToggleRef.current?.focus({ preventScroll: true }));
+  }
 
   useEffect(() => {
-    if (!railOpen) return;
+    if (!railOpen || panelOpen) return;
 
     const firstChapter = railRef.current?.querySelector<HTMLButtonElement>('button');
     firstChapter?.focus({ preventScroll: true });
@@ -61,18 +72,33 @@ export function WorkbenchShell({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [railOpen]);
+  }, [railOpen, panelOpen]);
+
+  // 右栏打开时聚焦其中第一个按钮；Esc 关闭并把焦点还给页头按钮
+  useEffect(() => {
+    if (!panelOpen) return;
+    panelRef.current?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape' || event.isComposing) return;
+      closePanel();
+    }
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [panelOpen]);
 
   return (
     <div
       className="wb-shell wb-scope"
       data-testid="workbench-root"
       data-rail-open={String(railOpen)}
+      data-panel-open={String(panelOpen)}
     >
       <header className="wb-shell-header" data-testid="workbench-header">
         <div className="wb-shell-heading">
           <span className="wb-shell-app">写作</span>
-          <span className="wb-shell-work">{workTitle}</span>
+          <h1 className="wb-shell-work">{workTitle}</h1>
         </div>
         <button
           ref={toggleRef}
@@ -85,6 +111,19 @@ export function WorkbenchShell({
         >
           章节
         </button>
+        {sidePanel ? (
+          <button
+            ref={panelToggleRef}
+            type="button"
+            className="wb-shell-panel-toggle"
+            data-testid="chapter-panel-toggle"
+            aria-expanded={panelOpen}
+            aria-controls="wb-chapter-panel"
+            onClick={() => setPanelOpen((open) => !open)}
+          >
+            本章
+          </button>
+        ) : null}
       </header>
 
       <div className="wb-shell-body">
@@ -134,6 +173,19 @@ export function WorkbenchShell({
           {children}
         </main>
       </div>
+
+      {sidePanel ? (
+        <aside
+          ref={panelRef}
+          id="wb-chapter-panel"
+          className="wb-shell-panel"
+          data-testid="chapter-panel"
+          aria-label="本章"
+          aria-hidden={!panelOpen}
+        >
+          {sidePanel(closePanel)}
+        </aside>
+      ) : null}
     </div>
   );
 }

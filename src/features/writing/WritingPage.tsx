@@ -25,17 +25,14 @@ import { ChapterListItem } from './ChapterListItem';
 import { SideStorySheet } from './SideStorySheet';
 
 /**
- * 阶段 2 的开发内联预览：只在 DEV / 测试环境存在，按需懒加载。
- * 生产构建里这个三元分支会被摇掉，不会把预览壳带进 bundle。
+ * 写作工作台按需加载：只有打开章节时才需要章节栏 / 右栏 / 内联编辑器代码，
+ * 首屏写作页（大纲、外传、提案入口）不必背上这份重量。
  */
-const InlineWorkbenchPreview =
-  import.meta.env.DEV || import.meta.env.MODE === 'test'
-    ? lazy(() =>
-        import('./workbench/InlineWorkbenchPreview').then((module) => ({
-          default: module.InlineWorkbenchPreview,
-        })),
-      )
-    : null;
+const WritingWorkbench = lazy(() =>
+  import('./workbench/WritingWorkbench').then((module) => ({
+    default: module.WritingWorkbench,
+  })),
+);
 
 /**
  * 大纲区块三个规划入口的关系：给作者一句「什么时候用哪个」。
@@ -122,9 +119,6 @@ function WritingContent({ novel }: { novel: Novel }) {
    * 阶段 2 的内联编辑器验证：只在开发/测试环境且显式带 `?inline-editor=1` 时启用。
    * 生产构建不会进入这个分支；默认 `/write` 仍是原来的页面 + 全屏编辑器。
    */
-  const inlineEditorPreview =
-    (import.meta.env.DEV || import.meta.env.MODE === 'test') &&
-    new URLSearchParams(location.search).has('inline-editor');
   const wantedChapterId =
     (location.state as { openChapterId?: string } | null)?.openChapterId ?? null;
 
@@ -246,6 +240,18 @@ function WritingContent({ novel }: { novel: Novel }) {
       ? sideStories.find((story) => story.id === sideSheet)
       : undefined;
 
+  /** 右栏「本章」的保存动作；失败交给面板显示，不弹全屏错误 */
+  async function saveInlineGoal(next: string) {
+    if (!editingChapter?.outlineNodeId) return false;
+    try {
+      await repository.updateOutlineNode(editingChapter.outlineNodeId, { synopsis: next });
+      invalidate();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   const editorContext: Omit<
     ContextRequest,
     'selectedEntryIds' | 'recentSummaryCount' | 'targetChapterId' | 'excludedNormIds'
@@ -323,7 +329,7 @@ function WritingContent({ novel }: { novel: Novel }) {
     </Section>
   );
 
-  if (inlineEditorPreview && editingChapter && editorContext && !editorOrphaned) {
+  if (editingChapter && editorContext && !editorOrphaned) {
     const toRailChapter = (chapter: Chapter) => ({
       id: chapter.id,
       // 标题里已经有章号的作品不再重复拼「第 N 章」；分组标题负责外传/主线语境
@@ -331,6 +337,12 @@ function WritingContent({ novel }: { novel: Novel }) {
       meta: `${chapter.status === 'done' ? '已完成' : '草稿'} · ${formatWordCount(chapter.wordCount)}`,
       current: chapter.id === editingChapter.id,
     });
+    const inlineOutlineNode = editingChapter.outlineNodeId
+      ? outline.find((node) => node.id === editingChapter.outlineNodeId)
+      : undefined;
+    const inlineLinkedEntries = inlineOutlineNode
+      ? (data?.entries ?? []).filter((entry) => inlineOutlineNode.linkedEntryIds.includes(entry.id))
+      : [];
     const inlineGroups = [
       {
         key: 'main',
@@ -352,27 +364,29 @@ function WritingContent({ novel }: { novel: Novel }) {
           </div>
         }
       >
-        {InlineWorkbenchPreview ? (
-          <InlineWorkbenchPreview
-            workTitle={novel.title}
-            railTitle="章节"
-            groups={inlineGroups}
-            railFooter={
-              <p>
-                {mainChapters.length} 章 · {formatWordCount(writtenWords)}
-                <br />
-                开发预览 · inline-editor
-              </p>
-            }
-            editor={{
-              chapter: editingChapter,
-              ...(editingSideStory ? { sideStory: editingSideStory } : {}),
-              context: editorContext,
-              onClose: () => setEditingChapterId(null),
-            }}
-            onSwitchChapter={setEditingChapterId}
-          />
-        ) : null}
+        <WritingWorkbench
+          workTitle={novel.title}
+          railTitle="章节"
+          groups={inlineGroups}
+          railFooter={
+            <p>
+              {mainChapters.length} 章 · {formatWordCount(writtenWords)}
+            </p>
+          }
+          editor={{
+            chapter: editingChapter,
+            ...(editingSideStory ? { sideStory: editingSideStory } : {}),
+            context: editorContext,
+            onClose: () => setEditingChapterId(null),
+          }}
+          onSwitchChapter={setEditingChapterId}
+          panel={{
+            ...(inlineOutlineNode ? { outlineNode: inlineOutlineNode } : {}),
+            linkedEntries: inlineLinkedEntries,
+            sideBrief: editingChapter.scenarioSource?.brief ?? '',
+            onSaveGoal: saveInlineGoal,
+          }}
+        />
       </Suspense>
     );
   }

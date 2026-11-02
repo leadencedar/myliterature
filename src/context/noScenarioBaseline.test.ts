@@ -265,6 +265,7 @@ function fixtures(): Fixtures {
     index,
     title,
     content,
+    note: '',
     sourceContent: '',
     sourceLanguage: '',
     wordCount: content.length,

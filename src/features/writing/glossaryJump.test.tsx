@@ -109,7 +109,7 @@ describe('从译名表跳到对不上的那一章', () => {
     await openGlossary(user);
     await user.click(await screen.findByRole('button', { name: '外传·青冥旧事 第 1 章' }));
 
-    const editor = await screen.findByRole('dialog', { name: '编辑外传《青冥旧事》第 1 章' });
+    const editor = await screen.findByRole('region', { name: '编辑外传《青冥旧事》第 1 章' });
     expect(editor).toHaveTextContent('外传·青冥旧事 第 1 章');
     expect(screen.getByLabelText('章节正文')).toHaveValue('阿什福德来了。');
   });

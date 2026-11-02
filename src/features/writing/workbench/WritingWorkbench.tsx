@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
+import type { KnowledgeEntry, OutlineNode } from '@/domain/schema';
 import { ChapterEditorScreen, type ChapterEditorHandle } from '../ChapterEditorScreen';
+import { ChapterPlanPanel } from './ChapterPlanPanel';
 import { WorkbenchShell, type WorkbenchChapterGroup } from './WorkbenchShell';
 
 type EditorProps = ComponentProps<typeof ChapterEditorScreen>;
 
-interface InlineWorkbenchPreviewProps {
+interface WritingWorkbenchProps {
   workTitle: string;
   railTitle?: string;
   groups: readonly WorkbenchChapterGroup[];
@@ -13,25 +15,31 @@ interface InlineWorkbenchPreviewProps {
   /** 复用编辑器全部 props；presentation / editorRef 由本组件接管 */
   editor: Omit<EditorProps, 'presentation' | 'editorRef'>;
   onSwitchChapter: (chapterId: string) => void;
+  /** 右栏「本章」数据；不传则不显示本章面板 */
+  panel?: {
+    outlineNode?: OutlineNode;
+    linkedEntries: readonly KnowledgeEntry[];
+    sideBrief: string;
+    onSaveGoal: (next: string) => Promise<boolean>;
+  };
 }
 
 /**
- * 阶段 2 的开发预览：工作台壳 + 内联编辑器。
+ * 写作工作台：章节栏 + 中栏编辑器 + 右栏「本章」。
  *
- * 只在 `/write?inline-editor=1`（DEV/测试环境）下由 WritingPage 懒加载；
- * 不进入生产 bundle。切章前先让编辑器 flush，保存失败就不切。
- *
- * 离开当前页（点主导航链接）时，若有未保存内容，先弹出「保存并离开 / 放弃 /
- * 继续编辑」。浏览器关闭/刷新由 beforeunload 兜底；浏览器后退暂未拦截。
+ * 阶段 3 起是 `/write` 打开章节后的默认形态（不再需要 dev 查询参数）。
+ * 切章前先让编辑器 flush，保存失败就不切；离开站内链接时先确认未保存内容，
+ * beforeunload 兜底关闭/刷新；浏览器后退暂未拦截。
  */
-export function InlineWorkbenchPreview({
+export function WritingWorkbench({
   workTitle,
   railTitle,
   groups,
   railFooter,
   editor,
   onSwitchChapter,
-}: InlineWorkbenchPreviewProps) {
+  panel,
+}: WritingWorkbenchProps) {
   const navigate = useNavigate();
   const editorRef = useRef<ChapterEditorHandle | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -126,6 +134,21 @@ export function InlineWorkbenchPreview({
         groups={groups}
         railFooter={railFooter}
         onSelectChapter={(chapterId) => void switchChapter(chapterId)}
+        sidePanel={
+          panel
+            ? (close) => (
+                <ChapterPlanPanel
+                  chapter={editor.chapter}
+                  outlineNode={panel.outlineNode}
+                  linkedEntries={panel.linkedEntries}
+                  sideBrief={panel.sideBrief}
+                  onSaveGoal={panel.onSaveGoal}
+                  onSaveNote={async (next) => (await editorRef.current?.saveNote(next)) ?? false}
+                  onClose={close}
+                />
+              )
+            : undefined
+        }
       >
         <ChapterEditorScreen
           key={editor.chapter.id}

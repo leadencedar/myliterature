@@ -1246,6 +1246,7 @@ describe('外传', () => {
           index: 1,
           title: '',
           content: '',
+          note: '',
           sourceContent: '',
           sourceLanguage: '',
           wordCount: 0,
@@ -2159,7 +2160,7 @@ describe('作品级译名表', () => {
 
 describe('持久化与迁移', () => {
   it('当前架构版本为 7', () => {
-    expect(database.verno).toBe(7);
+    expect(database.verno).toBe(8);
   });
 
   it('v4 → v5：旧章节的 sideStoryId 补成 null，外传表可用', async () => {
@@ -2233,9 +2234,11 @@ describe('持久化与迁移', () => {
     await upgraded.open();
     const upgradedRepo = new DexieNovelRepository(upgraded);
 
-    expect(upgraded.verno).toBe(7);
+    expect(upgraded.verno).toBe(8);
     const chapters = await upgradedRepo.listChapters('n1');
     expect(chapters.map((c) => c.sideStoryId)).toEqual([null, null]);
+    // v8：旧章节作者备忘补空串
+    expect(chapters.every((c) => c.note === '')).toBe(true);
     expect(await upgradedRepo.listSideStories('n1')).toEqual([]);
     // 升级后能直接建外传与外传章节，主线编号接着旧章节
     const story = await upgradedRepo.createSideStory('n1', { title: '青冥旧事' });
@@ -2343,7 +2346,7 @@ describe('持久化与迁移', () => {
     const upgraded = new AppDatabase(name);
     await upgraded.open();
     const upgradedRepo = new DexieNovelRepository(upgraded);
-    expect(upgraded.verno).toBe(7);
+    expect(upgraded.verno).toBe(8);
 
     const worldview = (await upgraded.importJobs.get('j-worldview')) as unknown as Record<
       string,
@@ -2386,6 +2389,20 @@ describe('持久化与迁移', () => {
     // 界面上会直接 chapter.sourceContent.trim()，undefined 会当场抛错
     expect(chapter.sourceContent).toBe('');
     expect(chapter.sourceLanguage).toBe('');
+  });
+
+  it('章节作者备忘默认空串，可更新并进入备份快照', async () => {
+    const novel = await seedNovel();
+    const chapter = await repo.createChapter(novel.id, { content: '正文' });
+    expect(chapter.note).toBe('');
+
+    const updated = await repo.updateChapter(chapter.id, { note: '待改：开头两段压缩。' });
+    expect(updated.note).toBe('待改：开头两段压缩。');
+
+    const snapshot = await repo.exportSnapshot();
+    expect(snapshot.chapters.find((item) => item.id === chapter.id)?.note).toBe(
+      '待改：开头两段压缩。',
+    );
   });
 
   it('原文与译文可以一起存，字数只按译文算', async () => {
@@ -2790,12 +2807,12 @@ describe('v5 → v6 迁移', () => {
     await upgraded.open();
     const upgradedRepo = new DexieNovelRepository(upgraded);
 
-    expect(upgraded.verno).toBe(7);
+    expect(upgraded.verno).toBe(8);
     expect(await upgraded.novels.get('n1')).toEqual(novelRow);
     // 打开时会一路升到 v7：v7 只给外传与章节补推演溯源的默认值 null，其余字段逐字段不变
     expect(await upgraded.sideStories.get('s1')).toEqual({ ...storyRow, scenarioSource: null });
     expect(await upgraded.chapters.bulkGet(['c1', 'c2'])).toEqual(
-      chapterRows.map((row) => ({ ...row, scenarioSource: null })),
+      chapterRows.map((row) => ({ ...row, scenarioSource: null, note: '' })),
     );
     expect(await upgraded.glossaries.get('g1')).toEqual(glossaryRow);
 
@@ -2941,7 +2958,7 @@ describe('v6 → v7 迁移', () => {
     const upgraded = new AppDatabase(name);
     await upgraded.open();
     const upgradedRepo = new DexieNovelRepository(upgraded);
-    expect(upgraded.verno).toBe(7);
+    expect(upgraded.verno).toBe(8);
 
     expect(await upgraded.novels.get('n1')).toEqual(novelRow);
     expect(await upgraded.categories.get('cat1')).toEqual(categoryRow);
@@ -2951,7 +2968,11 @@ describe('v6 → v7 迁移', () => {
       fieldLocks: {},
     });
     expect(await upgraded.outlineNodes.get('o1')).toEqual({ ...outlineRow, scenarioSource: null });
-    expect(await upgraded.chapters.get('c1')).toEqual({ ...chapterRow, scenarioSource: null });
+    expect(await upgraded.chapters.get('c1')).toEqual({
+      ...chapterRow,
+      scenarioSource: null,
+      note: '',
+    });
     expect(await upgraded.sideStories.get('s1')).toEqual({ ...storyRow, scenarioSource: null });
 
     const norms = new Map((await upgraded.writingNorms.toArray()).map((norm) => [norm.id, norm]));

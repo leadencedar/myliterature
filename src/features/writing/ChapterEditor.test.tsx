@@ -1005,7 +1005,7 @@ describe('外传章节', () => {
     renderPage();
     await waitForLoaded();
     await user.click(await screen.findByRole('button', { name: '继续写外传《青冥旧事》第 2 章' }));
-    const editor = await screen.findByRole('dialog', { name: '编辑外传《青冥旧事》第 2 章' });
+    const editor = await screen.findByRole('region', { name: '编辑外传《青冥旧事》第 2 章' });
     return { user, editor };
   }
 
@@ -1962,7 +1962,7 @@ describe('保存失败恢复与串行保存（审计 §3.1）', () => {
   });
 });
 
-describe('阶段 2 · 内联编辑器（dev 预览）', () => {
+describe('内联编辑器（默认工作台）', () => {
   it('以内联 region 挂在工作台壳里，并能从章节栏切章', async () => {
     await harness.repository.createChapter(novel.id, {
       title: '第1章 雪夜',
@@ -1971,7 +1971,7 @@ describe('阶段 2 · 内联编辑器（dev 预览）', () => {
     await harness.repository.createChapter(novel.id, { title: '第2章 霜降' });
 
     const user = userEvent.setup();
-    harness.renderUI(<WritingPage />, '/write?inline-editor=1');
+    harness.renderUI(<WritingPage />);
     await waitForLoaded();
 
     await user.click(await screen.findByRole('button', { name: '继续写第 1 章' }));
@@ -2000,7 +2000,7 @@ describe('阶段 2 · 内联编辑器（dev 预览）', () => {
     });
 
     const user = userEvent.setup();
-    harness.renderUI(<WritingPage />, '/write?inline-editor=1');
+    harness.renderUI(<WritingPage />);
     await waitForLoaded();
     await user.click(await screen.findByRole('button', { name: '继续写第 1 章' }));
     await screen.findByLabelText('章节正文');
@@ -2059,6 +2059,47 @@ describe('阶段 2 · 内联编辑器（dev 预览）', () => {
     });
   });
 
+  it('右栏「本章」可保存大纲目标与作者备忘', async () => {
+    await harness.repository.createChapter(novel.id, {
+      title: '第1章 雪夜',
+      outlineNodeId: chapterNode.id,
+    });
+
+    const user = userEvent.setup();
+    harness.renderUI(<WritingPage />);
+    await waitForLoaded();
+    await user.click(await screen.findByRole('button', { name: '继续写第 1 章' }));
+    await screen.findByLabelText('章节正文');
+
+    await user.click(screen.getByRole('button', { name: '本章' }));
+    const panel = await screen.findByTestId('chapter-plan-panel');
+    expect(panel).toBeInTheDocument();
+
+    // 目标：默认展开，编辑后写回大纲节点
+    await user.click(within(panel).getByRole('button', { name: '编辑' }));
+    const goal = within(panel).getByLabelText('本章目标');
+    await user.clear(goal);
+    await user.type(goal, '追兵临门，主角负伤逃进旧城。');
+    await user.click(within(panel).getByRole('button', { name: '保存' }));
+    await waitFor(async () => {
+      const nodes = await harness.repository.listOutline(novel.id);
+      expect(nodes.find((node) => node.id === chapterNode.id)?.synopsis).toBe(
+        '追兵临门，主角负伤逃进旧城。',
+      );
+    });
+
+    // 备忘：只写 Chapter.note，不碰正文
+    await user.click(within(panel).getByRole('button', { name: /作者备忘/u }));
+    await user.click(within(panel).getByRole('button', { name: '编辑' }));
+    await user.type(within(panel).getByLabelText('作者备忘'), '下一稿删掉第三段。');
+    await user.click(within(panel).getByRole('button', { name: '保存' }));
+    await waitFor(async () => {
+      const chapters = await harness.repository.listChapters(novel.id);
+      expect(chapters[0]?.note).toBe('下一稿删掉第三段。');
+      expect(chapters[0]?.content).toBe('');
+    });
+  });
+
   it('外传章节在章节栏按分组显示', async () => {
     await harness.repository.createChapter(novel.id, {
       title: '第1章 雪夜',
@@ -2068,7 +2109,7 @@ describe('阶段 2 · 内联编辑器（dev 预览）', () => {
     await harness.repository.createChapter(novel.id, { title: '渡口', sideStoryId: story.id });
 
     const user = userEvent.setup();
-    harness.renderUI(<WritingPage />, '/write?inline-editor=1');
+    harness.renderUI(<WritingPage />);
     await waitForLoaded();
     await user.click(await screen.findByRole('button', { name: '继续写第 1 章' }));
     await screen.findByLabelText('章节正文');

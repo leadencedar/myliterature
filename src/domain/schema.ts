@@ -197,6 +197,13 @@ export const ChapterSchema = z.object({
   title: z.string().max(200).default(''),
   content: z.string().default(''),
   /**
+   * 作者备忘：只给作者自己看。
+   *
+   * 不进入 AI prompt、章节摘要、检索与导出；只在本机库与备份快照里保存。
+   * 上限按“几段待改点”的量级给，避免变成第二篇正文。
+   */
+  note: z.string().max(5000).default(''),
+  /**
    * 翻译前的原文。
    *
    * 翻译是不可逆的破坏性操作，而机器译文一定有需要回头核对原句的地方，

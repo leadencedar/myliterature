@@ -554,7 +554,7 @@ describe('外传', () => {
     expect(story).toMatchObject({ title: '青冥旧事', synopsis: '二十年前的往事。' });
 
     await user.click(within(card).getByRole('button', { name: '写新一章' }));
-    const editor = await screen.findByRole('dialog', { name: '编辑外传《青冥旧事》第 1 章' });
+    const editor = await screen.findByRole('region', { name: '编辑外传《青冥旧事》第 1 章' });
     expect(within(editor).getByText('外传·青冥旧事 第 1 章')).toBeInTheDocument();
     expect(within(editor).getByLabelText('章节标题')).toHaveAttribute(
       'placeholder',
@@ -687,7 +687,7 @@ describe('外传', () => {
     renderPage();
     await waitForLoaded();
     await user.click(await screen.findByRole('button', { name: '继续写外传《青冥旧事》第 1 章' }));
-    const editor = await screen.findByRole('dialog', { name: '编辑外传《青冥旧事》第 1 章' });
+    const editor = await screen.findByRole('region', { name: '编辑外传《青冥旧事》第 1 章' });
     expect(within(editor).getByText('外传·青冥旧事 第 1 章')).toBeInTheDocument();
 
     await user.click(within(editor).getByRole('button', { name: '删除本章' }));

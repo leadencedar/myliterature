@@ -1,13 +1,15 @@
 /**
- * 零迁移独立验收（requirements §6 / decisions D7）：M1 不新增实体字段、不升 Dexie、不动备份版本。
+ * 迁移基线门禁（原 M1 零迁移验收，UI v2 阶段 3 更新）。
  *
- * 期望值来自改动前的 HEAD（`52e124e`）实测（由 /tmp 的 HEAD archive 一次性 dump，脚本不进仓库）：
- * - DB verno = 7
+ * M1 当时要求「不新增实体字段、不升 Dexie、不动备份版本」；阶段 3 有意加入
+ * `Chapter.note`（作者备忘），因此基线同步为：
+ * - DB verno = 8（v8 迁移给旧章节补空串）
  * - 表清单 16 张（不含 internal 表）
- * - BACKUP_VERSION = 4
+ * - BACKUP_VERSION = 5（旧版应用恢复 v5 备份会明确报版本过新，而不是静默丢 memo）
  * - 8 个核心 schema `parse` 后的 key 集合
  *
- * 任何一项变化都意味着「静默迁移」，按 P0 处理 —— 旧备份/旧库可能读取失败。
+ * 这个测试仍保留，用于防「再次静默迁移」：任何一项变化都必须同时更新数据库迁移、
+ * 备份版本与恢复测试。
  */
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -25,8 +27,8 @@ import {
 import { BACKUP_VERSION } from '@/features/export/backup';
 
 /** HEAD 上 dump 出来的冻结值，永不随实现更新 */
-const HEAD_VERNO = 7;
-const HEAD_BACKUP_VERSION = 4;
+const HEAD_VERNO = 8;
+const HEAD_BACKUP_VERSION = 5;
 const HEAD_TABLES = [
   'categories',
   'chapterSummaries',
@@ -52,6 +54,7 @@ const HEAD_SCHEMA_KEYS = {
     'createdAt',
     'id',
     'index',
+    'note',
     'novelId',
     'outlineNodeId',
     'scenarioSource',
