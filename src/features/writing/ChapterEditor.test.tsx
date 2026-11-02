@@ -2100,6 +2100,40 @@ describe('内联编辑器（默认工作台）', () => {
     });
   });
 
+  it('工作台页头与左栏可打开推演、大纲和搜索', async () => {
+    await harness.repository.createChapter(novel.id, {
+      title: '第1章 雪夜',
+      outlineNodeId: chapterNode.id,
+    });
+
+    const user = userEvent.setup();
+    harness.renderUI(<WritingPage />);
+    await waitForLoaded();
+    await user.click(await screen.findByRole('button', { name: '继续写第 1 章' }));
+    await screen.findByLabelText('章节正文');
+
+    // 页头：推演 / 导出
+    const scenario = screen.getByRole('button', { name: '推演' });
+    expect(screen.getByRole('button', { name: '导出' })).toBeInTheDocument();
+    await user.click(scenario);
+    const scenarioDialog = await screen.findByRole('dialog', { name: '互动推演' });
+    await user.click(within(scenarioDialog).getByRole('button', { name: '关闭' }));
+
+    // 左栏切大纲：复用 OutlineTreeView，点节点打开节点面板
+    await user.click(screen.getByRole('tab', { name: '大纲' }));
+    const outlineView = await screen.findByTestId('outline-rail-view');
+    await user.click(within(outlineView).getByRole('button', { name: '编辑「第1章 雪夜」' }));
+    expect(await screen.findByRole('dialog', { name: '大纲节点' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '关闭' }));
+
+    // 章节视图搜索：无结果给清除入口
+    await user.click(screen.getByRole('tab', { name: '章节' }));
+    await user.type(screen.getByRole('searchbox', { name: '搜索章节' }), '不存在的章');
+    expect(screen.getByText('没有匹配章节。')).toBeInTheDocument();
+    await user.click(screen.getAllByRole('button', { name: '清除搜索' })[0]!);
+    expect(screen.getByRole('button', { name: /第1章 雪夜/u })).toBeInTheDocument();
+  });
+
   it('外传章节在章节栏按分组显示', async () => {
     await harness.repository.createChapter(novel.id, {
       title: '第1章 雪夜',
@@ -2114,7 +2148,11 @@ describe('内联编辑器（默认工作台）', () => {
     await user.click(await screen.findByRole('button', { name: '继续写第 1 章' }));
     await screen.findByLabelText('章节正文');
 
-    expect(screen.getByRole('heading', { name: '外传·青冥旧事' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /外传·青冥旧事/u })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /渡口/u })).toBeInTheDocument();
+
+    // 外传分组级动作：编辑外传
+    await user.click(screen.getByRole('button', { name: '编辑' }));
+    expect(await screen.findByRole('dialog', { name: '编辑外传·青冥旧事' })).toBeInTheDocument();
   });
 });

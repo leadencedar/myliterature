@@ -3,7 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import type { KnowledgeEntry, OutlineNode } from '@/domain/schema';
 import { ChapterEditorScreen, type ChapterEditorHandle } from '../ChapterEditorScreen';
 import { ChapterPlanPanel } from './ChapterPlanPanel';
-import { WorkbenchShell, type WorkbenchChapterGroup } from './WorkbenchShell';
+import {
+  WorkbenchShell,
+  type WorkbenchChapterGroup,
+  type WorkbenchRailTab,
+} from './WorkbenchShell';
 
 type EditorProps = ComponentProps<typeof ChapterEditorScreen>;
 
@@ -15,6 +19,15 @@ interface WritingWorkbenchProps {
   /** 复用编辑器全部 props；presentation / editorRef 由本组件接管 */
   editor: Omit<EditorProps, 'presentation' | 'editorRef'>;
   onSwitchChapter: (chapterId: string) => void;
+  /** 把编辑器命令面交给父级（新建章节前 flush 用） */
+  onEditorHandle?: (handle: ChapterEditorHandle | null) => void;
+  /** 页头动作：推演 / 待确认 / 导出等 */
+  headerActions?: ReactNode;
+  /** 左栏视图切换 */
+  railTabs?: readonly WorkbenchRailTab[];
+  outlineView?: ReactNode;
+  /** 章节视图底部动作 */
+  railActions?: ReactNode;
   /** 右栏「本章」数据；不传则不显示本章面板 */
   panel?: {
     outlineNode?: OutlineNode;
@@ -38,10 +51,20 @@ export function WritingWorkbench({
   railFooter,
   editor,
   onSwitchChapter,
+  onEditorHandle,
+  headerActions,
+  railTabs,
+  outlineView,
+  railActions,
   panel,
 }: WritingWorkbenchProps) {
   const navigate = useNavigate();
   const editorRef = useRef<ChapterEditorHandle | null>(null);
+
+  // 把 flush/hasPendingChanges 交给写作页：新建章节前也要先保存当前章
+  useEffect(() => {
+    onEditorHandle?.(editorRef.current);
+  }, [editor.chapter.id, onEditorHandle]);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const [leaveHref, setLeaveHref] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
@@ -134,6 +157,10 @@ export function WritingWorkbench({
         groups={groups}
         railFooter={railFooter}
         onSelectChapter={(chapterId) => void switchChapter(chapterId)}
+        headerActions={headerActions}
+        railTabs={railTabs}
+        outlineView={outlineView}
+        railActions={railActions}
         sidePanel={
           panel
             ? (close) => (
