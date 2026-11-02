@@ -212,6 +212,8 @@ describe('段落加工', () => {
     expect(systemOf(spy, 0)).not.toContain(NORM_FIXTURE_MARKER);
     expect(await normEnabled()).toBe(true);
 
+    // 未采用的建议会按章保留；这里明确放弃结果，才能回到表单重跑
+    await user.click(within(dialog).getByRole('button', { name: '放弃，重新设置' }));
     await user.click(within(dialog).getByRole('button', { name: '关闭' }));
     const reopened = await openRevise(user);
     expect(normChip(reopened)).toHaveAttribute('aria-pressed', 'true');

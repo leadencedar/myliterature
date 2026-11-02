@@ -5,6 +5,7 @@ import { countWords } from '@/domain/primitives';
 import { normsInScope } from '@/domain/writingNorm';
 import { LlmError } from '@/llm/errors';
 import { useLlm } from '@/llm/useLlm';
+import { useUnreviewedSuggestion, useUnreviewedSuggestions } from './unreviewedSuggestions';
 import { VOICE_LIBRARY } from '@/prompt/voiceLibrary';
 import { Button } from '@/ui/Button';
 import { SegmentedControl } from '@/ui/Controls';
@@ -67,14 +68,29 @@ export function ReviseSheet({
   initialInstruction,
 }: ReviseSheetProps) {
   const llm = useLlm();
+  const chapterId = context.targetChapterId ?? '';
+  const storedSuggestion = useUnreviewedSuggestion(chapterId);
+  const markUnreviewed = useUnreviewedSuggestions((state) => state.mark);
+  const clearUnreviewed = useUnreviewedSuggestions((state) => state.clear);
 
   const [action, setAction] = useState<ReviseAction>('rewrite');
   const [voiceId, setVoiceId] = useState<string | null>(null);
   const [instruction, setInstruction] = useState('');
-  const [phase, setPhase] = useState<Phase>({ kind: 'form' });
+  const [phase, setPhase] = useState<Phase>(() =>
+    storedSuggestion ? { kind: 'done', text: storedSuggestion.text } : { kind: 'form' },
+  );
   /** 本次临时不注入的写作规范；和临时笔法一样只影响这一次，不写库 */
   const [excludedNormIds, setExcludedNormIds] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+
+  // 加工结果一出现就按章留痕；采用成功后由编辑器清除
+  useEffect(() => {
+    if (phase.kind !== 'done' || !phase.text.trim()) return;
+    markUnreviewed(chapterId, 'revise', phase.text, {
+      content,
+      selection: { start: selection.start, end: selection.end, text: selection.text },
+    });
+  }, [chapterId, markUnreviewed, phase]);
 
   const hasSelection = selection.text.trim().length > 0;
 
@@ -82,7 +98,8 @@ export function ReviseSheet({
   const wasOpen = useRef(false);
   useEffect(() => {
     if (open && !wasOpen.current) {
-      setPhase({ kind: 'form' });
+      // 上次生成后没采用：按章保留的建议重新打开时直接回到结果态
+      setPhase(storedSuggestion ? { kind: 'done', text: storedSuggestion.text } : { kind: 'form' });
       setInstruction(initialInstruction ?? '');
       setVoiceId(null);
       setExcludedNormIds([]);
@@ -333,7 +350,15 @@ export function ReviseSheet({
               <Button variant="primary" size="lg" block onClick={accept}>
                 {actionDef.placement === 'replace' ? '替换原文' : '插入正文'}
               </Button>
-              <Button variant="ghost" size="md" block onClick={() => setPhase({ kind: 'form' })}>
+              <Button
+                variant="ghost"
+                size="md"
+                block
+                onClick={() => {
+                  clearUnreviewed(chapterId);
+                  setPhase({ kind: 'form' });
+                }}
+              >
                 放弃，重新设置
               </Button>
             </div>

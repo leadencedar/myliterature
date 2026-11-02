@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useActiveNovel } from '@/app/store/useActiveNovel';
@@ -325,6 +325,30 @@ describe('提示词内容', () => {
 });
 
 describe('撤销', () => {
+  it('采用后继续编辑：整段撤销被保护，改为查看改前版本', async () => {
+    stubStream(['改写后的第二段。']);
+    const user = await openEditor();
+
+    await selectAndOpen(user, '第二段的内容。');
+    await user.click(
+      within(screen.getByRole('dialog', { name: '加工这一段' })).getByRole('button', {
+        name: '开始改写',
+      }),
+    );
+    await screen.findByLabelText('结果（可直接修改）');
+    await user.click(screen.getByRole('button', { name: '替换原文' }));
+    await waitFor(async () => expect(await chapterContent()).toContain('改写后的第二段。'));
+
+    // 采用后又改正文：整段回滚会吞掉后续编辑，只能查看改前版本
+    await user.type(screen.getByLabelText('章节正文'), '后续编辑。');
+    await user.click(await screen.findByRole('button', { name: '查看改前版本' }));
+
+    const dialog = await screen.findByRole('dialog', { name: '改前版本' });
+    expect(dialog).toHaveTextContent('第一段的内容。');
+    expect(dialog).toHaveTextContent('第二段的内容。');
+    expect(screen.queryByRole('button', { name: /撤销 AI 改动/u })).not.toBeInTheDocument();
+  });
+
   it('采用后出现撤销入口，点击还原正文', async () => {
     stubStream(['改写后的第二段。']);
     const user = await openEditor();
@@ -453,5 +477,64 @@ describe('错误与中断', () => {
 
     expect(screen.getByText('操作')).toBeInTheDocument();
     expect(await chapterContent()).toBe(INITIAL);
+  });
+});
+
+describe('未审阅建议与采用基准', () => {
+  it('采用前正文已被改动：拦截并不覆盖后续编辑', async () => {
+    stubStream(['模型建议的版本。']);
+    const user = await openEditor();
+    await selectAndOpen(user, '第二段的内容。');
+
+    await user.click(
+      within(screen.getByRole('dialog', { name: '加工这一段' })).getByRole('button', {
+        name: '开始改写',
+      }),
+    );
+    await screen.findByLabelText('结果（可直接修改）');
+
+    // 模拟面板打开期间正文被外部改动（另一个标签页/自动流程）
+    const changed = `${INITIAL}\n\n后来补上的段落。`;
+    fireEvent.change(screen.getByLabelText('章节正文'), { target: { value: changed } });
+
+    await user.click(screen.getByRole('button', { name: '替换原文' }));
+
+    const conflict = await screen.findByRole('dialog', { name: '当前正文已变化' });
+    expect(conflict).toHaveTextContent('本次没有采用');
+    await user.click(within(conflict).getByRole('button', { name: '查看原文' }));
+    expect(conflict).toHaveTextContent('第二段的内容。');
+    await user.click(within(conflict).getByRole('button', { name: '取消' }));
+
+    await waitFor(async () => {
+      const content = await chapterContent();
+      expect(content).toContain('后来补上的段落。');
+      expect(content).not.toContain('模型建议的版本。');
+    });
+  });
+
+  it('关闭面板后建议按章保留，可继续审阅并采用', async () => {
+    stubStream(['保留下来的一句话。']);
+    const user = await openEditor();
+    await selectAndOpen(user, '第二段的内容。');
+
+    await user.click(
+      within(screen.getByRole('dialog', { name: '加工这一段' })).getByRole('button', {
+        name: '开始改写',
+      }),
+    );
+    await screen.findByLabelText('结果（可直接修改）');
+
+    // 不采用直接关闭：建议仍留在会话内
+    await user.click(
+      within(screen.getByRole('dialog', { name: '加工这一段' })).getByRole('button', {
+        name: '关闭',
+      }),
+    );
+    expect(screen.getByRole('button', { name: '继续审阅 AI 建议' })).toBeInTheDocument();
+    expect(screen.getByLabelText(/待审阅建议 1 条/u)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '继续审阅 AI 建议' }));
+    const reopened = await screen.findByRole('dialog', { name: '加工这一段' });
+    expect(within(reopened).getByLabelText('结果（可直接修改）')).toHaveValue('保留下来的一句话。');
   });
 });

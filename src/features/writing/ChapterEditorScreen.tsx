@@ -7,7 +7,8 @@ import { countWords } from '@/domain/primitives';
 import type { Chapter, Proposal, SideStory } from '@/domain/schema';
 import { chapterLabel } from '@/domain/sideStory';
 import { Button, IconButton } from '@/ui/Button';
-import { ConfirmDialog } from '@/ui/Sheet';
+import { copyText, saveTextFile } from '@/ui/download';
+import { ConfirmDialog, Sheet } from '@/ui/Sheet';
 import { BackIcon, TrashIcon, UndoIcon } from '@/ui/icons';
 import { detectLanguage, needsTranslationToChinese } from '@/domain/language';
 import { normsInScope } from '@/domain/writingNorm';
@@ -21,6 +22,7 @@ import { ChapterSummarySheet } from './ChapterSummarySheet';
 import { TranslateSheet } from './TranslateSheet';
 import { GenerateChapterSheet } from './GenerateChapterSheet';
 import { useIncompleteDraft, useIncompleteDrafts } from './incompleteDrafts';
+import { useUnreviewedSuggestion, useUnreviewedSuggestions } from './unreviewedSuggestions';
 import { NormCheckSheet, type NormCheckSession } from './NormCheckSheet';
 import { StyleCheckSheet } from './StyleCheckSheet';
 import type { StyleCheckIssue } from '@/features/style/styleCheck';
@@ -49,10 +51,19 @@ type SaveState = 'saved' | 'pending' | 'saving' | 'error';
 
 const SAVE_LABELS: Record<SaveState, string> = {
   saved: '已保存',
-  pending: '有改动',
-  saving: '保存中…',
+  pending: '有未保存更改',
+  saving: '正在保存…',
   error: '保存失败',
 };
+
+/** 保存成功时间：用落库后的 updatedAt，不让 UI 自己猜 */
+function formatSaveTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
 
 /**
  * 正在后台跑的归档任务（按章节 id 去重）。
@@ -177,12 +188,16 @@ export function ChapterEditorScreen({
   const incompleteDraft = useIncompleteDraft(chapter.id);
   const markIncomplete = useIncompleteDrafts((state) => state.markIncomplete);
   const clearIncomplete = useIncompleteDrafts((state) => state.clearIncomplete);
+  const unreviewedSuggestion = useUnreviewedSuggestion(chapter.id);
+  const clearUnreviewed = useUnreviewedSuggestions((state) => state.clear);
 
   // 初值只在挂载时取。调用方用 key={chapter.id} 保证换章节时重新挂载
   const [title, setTitle] = useState(chapter.title);
   const [content, setContent] = useState(chapter.content);
   const [status, setStatus] = useState<Chapter['status']>(chapter.status);
   const [saveState, setSaveState] = useState<SaveState>('saved');
+  /** 最近一次成功落库的时间（updatedAt）；初始值来自已加载章节 */
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(chapter.updatedAt || null);
   const [generateOpen, setGenerateOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -224,6 +239,20 @@ export function ChapterEditorScreen({
     action: ReviseAction;
     instruction: string;
   } | null>(null);
+  /** 采用前基准：生成面板打开时的正文、加工面板打开时的选区 */
+  const generateBaselineRef = useRef<string | null>(null);
+  const reviseBaselineRef = useRef<{
+    content: string;
+    start: number;
+    end: number;
+    text: string;
+  } | null>(null);
+  /** 基准已变：展示冲突并让作者选择查看原文/重新生成/取消 */
+  const [adoptionConflict, setAdoptionConflict] = useState<{
+    kind: 'generate' | 'revise';
+    original: string;
+  } | null>(null);
+  const [showAdoptionOriginal, setShowAdoptionOriginal] = useState(false);
 
   /**
    * 挂载时恢复本章的归档状态（design §6.5）：只查 pending、不重跑。
@@ -304,8 +333,11 @@ export function ChapterEditorScreen({
    * 自己维护而不是靠浏览器：程序化修改 value 会清掉 textarea 的原生撤销历史，
    * 而 AI 改写恰恰是最需要「一键还原」的操作 —— 用户敢不敢试，取决于能不能退回来。
    */
-  const historyRef = useRef<string[]>([]);
+  const historyRef = useRef<{ before: string; after: string }[]>([]);
   const [canUndo, setCanUndo] = useState(false);
+  /** 撤销被后续编辑挡住时，展示改前全文供复制/另存 */
+  const [undoConflict, setUndoConflict] = useState<string | null>(null);
+  const [undoCopyStatus, setUndoCopyStatus] = useState<string | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 待保存的内容。放 ref 里以便离场时立即冲刷 */
@@ -381,6 +413,7 @@ export function ChapterEditorScreen({
         // 但要给作者一个可见提示：状态行显示「已保存」的同时说明进度没记上
         setProgressIssue(true);
       }
+      setLastSavedAt(saved.updatedAt);
       invalidate();
       setSaveState('saved');
       return true;
@@ -580,7 +613,7 @@ export function ChapterEditorScreen({
    * 不留「正文已替换、状态还是已完成」的中间态。
    */
   async function commitContent(next: string, patch: Partial<Chapter> = {}) {
-    historyRef.current.push(content);
+    historyRef.current.push({ before: content, after: next });
     setCanUndo(true);
     setContent(next);
     // 用户明确确认过的动作，不等防抖
@@ -597,7 +630,7 @@ export function ChapterEditorScreen({
    * 万一译得不对，一键就能退回外文原稿。
    */
   async function applyTranslation(translated: string, sourceText: string) {
-    historyRef.current.push(content);
+    historyRef.current.push({ before: content, after: translated });
     setCanUndo(true);
     setContent(translated);
     setSourceBackup(sourceText);
@@ -619,6 +652,13 @@ export function ChapterEditorScreen({
     // 空结果守卫：生成面板已经拦住空流，这里再挡一层 —— 任何调用方都不该拿
     // 空正文（replace 的 next、append 的尾巴）覆盖已有正文，否则会清空章节
     if (!text.trim()) return;
+    // 采用前基准检查：优先用建议第一次生成时的正文快照，避免重新打开面板后基准被刷新
+    const storedBaseline = useUnreviewedSuggestions.getState().items[chapter.id]?.baseline;
+    const baseline = storedBaseline?.content ?? generateBaselineRef.current;
+    if (baseline !== null && baseline !== undefined && content !== baseline) {
+      setAdoptionConflict({ kind: 'generate', original: baseline });
+      return;
+    }
     const next = mode === 'append' ? `${content.trimEnd()}\n\n${text.trim()}` : text.trim();
     // 与确认文案「采用后本章仍是草稿」一致：已完成章节不能留半章当定稿。
     // 状态与正文放进同一次写库；摘要等作者重新标完成时再生成，这里不自动触发
@@ -629,36 +669,92 @@ export function ChapterEditorScreen({
     // 完整采用则清掉之前的提醒（作者可能已经补写或重新生成了完整稿）
     if (meta?.incomplete) markIncomplete(chapter.id);
     else clearIncomplete(chapter.id);
+    generateBaselineRef.current = null;
+    clearUnreviewed(chapter.id);
   }
 
   async function applyRevised(replacement: string, action: ReviseAction) {
+    const stored = useUnreviewedSuggestions.getState().items[chapter.id];
+    const baseline =
+      stored?.kind === 'revise' && stored.baseline
+        ? {
+            content: stored.baseline.content,
+            start: stored.baseline.selection?.start ?? selectionRange.start,
+            end: stored.baseline.selection?.end ?? selectionRange.end,
+            text: stored.baseline.selection?.text ?? '',
+          }
+        : reviseBaselineRef.current;
+    if (
+      baseline &&
+      (content !== baseline.content ||
+        normalizeSelection(content, baseline.start, baseline.end).text !== baseline.text)
+    ) {
+      setAdoptionConflict({ kind: 'revise', original: baseline.text });
+      return;
+    }
     const actionDef = findReviseAction(action);
+    const start = baseline?.start ?? selectionRange.start;
+    const end = baseline?.end ?? selectionRange.end;
     const selection = actionDef.requiresSelection
-      ? normalizeSelection(content, selectionRange.start, selectionRange.end)
-      : normalizeSelection(content, selectionRange.start, selectionRange.end).text.trim()
-        ? normalizeSelection(content, selectionRange.start, selectionRange.end)
+      ? normalizeSelection(content, start, end)
+      : normalizeSelection(content, start, end).text.trim()
+        ? normalizeSelection(content, start, end)
         : selectionAtEnd(content);
     await commitContent(applyRevision(content, selection, replacement, actionDef));
+    reviseBaselineRef.current = null;
+    clearUnreviewed(chapter.id);
   }
 
   async function undo() {
-    const previous = historyRef.current.pop();
-    if (previous === undefined) return;
+    const entry = historyRef.current[historyRef.current.length - 1];
+    if (!entry) return;
+    // 采用后作者又改过正文：整段回滚会吞掉后续编辑，改为展示改前版本
+    if (content !== entry.after) {
+      setUndoConflict(entry.before);
+      return;
+    }
+    historyRef.current.pop();
     setCanUndo(historyRef.current.length > 0);
-    setContent(previous);
-    pendingRef.current = { ...pendingRef.current, content: previous };
+    setContent(entry.before);
+    pendingRef.current = { ...pendingRef.current, content: entry.before };
 
     /**
      * 撤销的正好是那次翻译：把原文备份一并清掉。
      * 否则这一章会同时是「正文为原文」和「译过一次」，
      * 界面上会挂着一个「重译」按钮，而它其实什么都没译过。
      */
-    if (sourceBackup.trim() && previous === sourceBackup) {
+    if (sourceBackup.trim() && entry.before === sourceBackup) {
       setSourceBackup('');
       pendingRef.current = { ...pendingRef.current, sourceContent: '', sourceLanguage: '' };
     }
     if (timerRef.current) clearTimeout(timerRef.current);
     await flush.current();
+  }
+
+  /** 在打开加工面板前记下正文与选区；采用时用它做基准检查 */
+  function rememberReviseBaseline() {
+    const element = textareaRef.current;
+    const start = element?.selectionStart ?? selectionRange.start;
+    const end = element?.selectionEnd ?? selectionRange.end;
+    reviseBaselineRef.current = {
+      content,
+      start,
+      end,
+      text: normalizeSelection(content, start, end).text,
+    };
+  }
+
+  function openReviseSheet() {
+    // 同步 DOM 选区到 state，再记采用基准（两者来源不同：一个给面板，一个给采用检查）
+    captureSelection();
+    rememberReviseBaseline();
+    setReviseSeed(null);
+    setReviseOpen(true);
+  }
+
+  function openGenerateSheet() {
+    generateBaselineRef.current = content;
+    setGenerateOpen(true);
   }
 
   /** 记录选区，供段落级操作使用 */
@@ -757,6 +853,7 @@ export function ChapterEditorScreen({
   /** 按建议改写：先定位，再打开段落加工并预填。写入正文仍要作者在加工面板里确认 */
   function reviseIssue(issue: ResolvedCheckIssue) {
     if (!selectIssueQuote(issue)) return;
+    rememberReviseBaseline();
     setReviseSeed({
       action: 'rewrite',
       instruction: `按写作规范《${displayNormTitle(issue.normTitle)}》修改：${issue.suggestion}`,
@@ -787,11 +884,21 @@ export function ChapterEditorScreen({
    */
   function reviseStyleIssue(issue: StyleCheckIssue) {
     if (!selectStyleIssueQuote(issue)) return;
+    rememberReviseBaseline();
     setReviseSeed({
       action: 'rewrite',
       instruction: `按文风检查建议修改：${issue.suggestion}（依据：${issue.basis}）`,
     });
     setReviseOpen(true);
+  }
+
+  const lastUndoEntry = historyRef.current[historyRef.current.length - 1];
+  const undoBlocked = canUndo && lastUndoEntry !== undefined && content !== lastUndoEntry.after;
+
+  /** 保存失败时的「带走草稿」出口：不依赖数据库，把当前标题与正文下载成 txt */
+  function exportDraft() {
+    const base = (title.trim() || label).replace(/[\\/:*?"<>|]/gu, '-');
+    saveTextFile(`${base}-草稿.txt`, `${title}\n\n${content}`);
   }
 
   return (
@@ -842,7 +949,17 @@ export function ChapterEditorScreen({
           <span>{label}</span>
           <span>{wordCount} 字</span>
           <span aria-live="polite" className={saveState === 'error' ? 'text-seal' : 'text-ink-300'}>
-            {SAVE_LABELS[saveState]}
+            <span>{SAVE_LABELS[saveState]}</span>
+            {saveState === 'saved' && lastSavedAt ? (
+              <span className="text-ink-300"> · {formatSaveTime(lastSavedAt)}</span>
+            ) : null}
+          </span>
+          {/* 单机库没有跨端版本号：按规格明确说「未检测版本」，不假装有冲突检测 */}
+          <span
+            className="hidden text-[0.625rem] text-ink-300 lg:inline"
+            title="当前是单机 IndexedDB，暂不提供跨端版本对照"
+          >
+            未检测版本
           </span>
           {progressIssue ? (
             <span role="status" className="text-accent">
@@ -852,13 +969,34 @@ export function ChapterEditorScreen({
           {/* 桌面端提示快捷键。窄屏没有物理键盘，显示它只是占地方 */}
           <span className="hidden text-ink-300 lg:inline">⌘/Ctrl + S 保存</span>
           {canUndo ? (
+            undoBlocked ? (
+              <button
+                type="button"
+                onClick={() => setUndoConflict(lastUndoEntry?.before ?? null)}
+                className="inline-flex items-center gap-1 rounded-full bg-paper-sunken px-2 py-1 text-[0.6875rem] text-ink-700"
+              >
+                查看改前版本
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={undo}
+                className="inline-flex items-center gap-1 rounded-full bg-paper-sunken px-2 py-1 text-[0.6875rem] text-ink-700"
+              >
+                <UndoIcon className="h-3.5 w-3.5" />
+                撤销 AI 改动
+              </button>
+            )
+          ) : null}
+          {unreviewedSuggestion ? (
             <button
               type="button"
-              onClick={undo}
-              className="inline-flex items-center gap-1 rounded-full bg-paper-sunken px-2 py-1 text-[0.6875rem] text-ink-700"
+              onClick={
+                unreviewedSuggestion.kind === 'generate' ? openGenerateSheet : openReviseSheet
+              }
+              className="rounded-full bg-accent-soft px-2.5 py-1 text-[0.6875rem] font-medium text-accent"
             >
-              <UndoIcon className="h-3.5 w-3.5" />
-              撤销 AI 改动
+              继续审阅 AI 建议
             </button>
           ) : null}
           {/* 只在这一章确实需要翻译、或已经译过时出现。
@@ -1048,6 +1186,31 @@ export function ChapterEditorScreen({
         ) : null}
       </header>
 
+      {/* 保存失败常驻错误条：正文仍在本地内存，给重试与导出草稿两条出路 */}
+      {saveState === 'error' && !exitBlocked ? (
+        <div role="alert" className="reading-column px-3 pt-2 lg:px-1">
+          <div className="flex flex-wrap items-center gap-2 rounded-lg bg-accent-soft px-3 py-2 text-xs leading-relaxed text-ink-700">
+            <span className="flex-1">
+              保存失败，草稿仍保留{saveError ? `（${saveError}）` : ''}。
+            </span>
+            <button
+              type="button"
+              onClick={() => void flush.current()}
+              className="shrink-0 rounded-full bg-paper-raised px-2.5 py-1 text-[0.6875rem] font-medium text-ink-700"
+            >
+              重试保存
+            </button>
+            <button
+              type="button"
+              onClick={exportDraft}
+              className="shrink-0 rounded-full bg-paper-raised px-2.5 py-1 text-[0.6875rem] font-medium text-ink-700"
+            >
+              导出草稿
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {/* 退出被拦：保存一直失败时不能一关了之，给作者「重试 / 放弃」两个出口 */}
       {exitBlocked ? (
         <div role="alert" className="reading-column px-3 pt-2 lg:px-1">
@@ -1062,6 +1225,13 @@ export function ChapterEditorScreen({
               className="shrink-0 rounded-full bg-paper-raised px-2.5 py-1 text-[0.6875rem] font-medium text-ink-700"
             >
               重试保存
+            </button>
+            <button
+              type="button"
+              onClick={exportDraft}
+              className="shrink-0 rounded-full bg-paper-raised px-2.5 py-1 text-[0.6875rem] font-medium text-ink-700"
+            >
+              导出草稿
             </button>
             <button
               type="button"
@@ -1103,19 +1273,21 @@ export function ChapterEditorScreen({
             variant="secondary"
             size="lg"
             block
-            onClick={() => {
-              captureSelection();
-              // 普通加工不带「按建议改写」留下的预填
-              setReviseSeed(null);
-              setReviseOpen(true);
-            }}
+            disabled={!content.trim()}
+            title={!content.trim() ? '正文还是空的，先写一点或「生成本章」再加工' : undefined}
+            onClick={openReviseSheet}
           >
             加工这一段
           </Button>
-          <Button variant="primary" size="lg" block onClick={() => setGenerateOpen(true)}>
+          <Button variant="primary" size="lg" block onClick={openGenerateSheet}>
             生成本章
           </Button>
         </div>
+        {!content.trim() ? (
+          <p className="reading-column mt-1 px-1 text-[0.6875rem] text-ink-500 lg:px-1">
+            正文还是空的，先写一点或「生成本章」再加工。
+          </p>
+        ) : null}
       </footer>
 
       <GenerateChapterSheet
@@ -1217,6 +1389,96 @@ export function ChapterEditorScreen({
           setArchiveState({ kind: 'idle' });
         }}
       />
+
+      <Sheet
+        open={adoptionConflict !== null}
+        title="当前正文已变化"
+        description="这条建议生成后正文被修改过。为避免覆盖后续编辑，本次没有采用。"
+        onClose={() => {
+          setAdoptionConflict(null);
+          setShowAdoptionOriginal(false);
+        }}
+        size="dialog"
+      >
+        <p className="text-xs leading-relaxed text-ink-500">
+          可以查看建议生成时的原文，或重新生成一份建议；取消则保留当前正文。
+        </p>
+        {showAdoptionOriginal ? (
+          <pre className="mt-2 max-h-56 overflow-auto rounded-lg bg-paper px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap text-ink-700">
+            {adoptionConflict?.original}
+          </pre>
+        ) : null}
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button size="sm" onClick={() => setShowAdoptionOriginal((shown) => !shown)}>
+            {showAdoptionOriginal ? '收起原文' : '查看原文'}
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={() => {
+              const kind = adoptionConflict?.kind;
+              setAdoptionConflict(null);
+              setShowAdoptionOriginal(false);
+              if (kind === 'generate') openGenerateSheet();
+              else {
+                rememberReviseBaseline();
+                setReviseSeed(null);
+                setReviseOpen(true);
+              }
+            }}
+          >
+            重新生成
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => {
+              setAdoptionConflict(null);
+              setShowAdoptionOriginal(false);
+            }}
+          >
+            取消
+          </Button>
+        </div>
+      </Sheet>
+
+      <Sheet
+        open={undoConflict !== null}
+        title="改前版本"
+        description="正文已经有后续编辑，不能再整段撤销。可以复制或另存这份改前内容，当前正文不会被覆盖。"
+        onClose={() => {
+          setUndoConflict(null);
+          setUndoCopyStatus(null);
+        }}
+        size="dialog"
+      >
+        <pre className="max-h-64 overflow-auto rounded-lg bg-paper px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap text-ink-700">
+          {undoConflict}
+        </pre>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            onClick={() => {
+              void (async () => {
+                const ok = await copyText(undoConflict ?? '');
+                setUndoCopyStatus(ok ? '已复制' : '复制失败，请手动选择');
+              })();
+            }}
+          >
+            复制
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => saveTextFile(`${label}-改前版本.txt`, undoConflict ?? '')}
+          >
+            另存为 txt
+          </Button>
+          {undoCopyStatus ? (
+            <span role="status" className="text-xs text-ink-500">
+              {undoCopyStatus}
+            </span>
+          ) : null}
+        </div>
+      </Sheet>
 
       <ConfirmDialog
         open={confirmDelete}
