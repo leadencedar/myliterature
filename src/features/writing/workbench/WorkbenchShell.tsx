@@ -40,6 +40,8 @@ interface WorkbenchShellProps {
   outlineView?: ReactNode;
   /** 章节视图底部的动作：新建章节 / 新建外传 / 规划后续等 */
   railActions?: ReactNode;
+  /** 移动端底部操作栏的 AI 菜单入口；不传则不显示 AI 按钮 */
+  onOpenAi?: () => void;
   children: ReactNode;
 }
 
@@ -63,6 +65,7 @@ export function WorkbenchShell({
   railTabs,
   outlineView,
   railActions,
+  onOpenAi,
   children,
 }: WorkbenchShellProps) {
   const [railOpen, setRailOpen] = useState(false);
@@ -74,6 +77,7 @@ export function WorkbenchShell({
   const panelToggleRef = useRef<HTMLButtonElement>(null);
   const railRef = useRef<HTMLElement>(null);
   const panelRef = useRef<HTMLElement>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
 
   const outlineKey = railTabs?.find((tab) => tab.key === 'outline')?.key;
   const showingOutline =
@@ -88,6 +92,13 @@ export function WorkbenchShell({
     }))
     .filter((group) => group.chapters.length > 0);
   const firstVisibleChapter = visibleGroups[0]?.chapters[0];
+  const flatChapters = groups.flatMap((group) => group.chapters);
+  const currentIndex = flatChapters.findIndex((chapter) => chapter.current);
+  const previousChapter = currentIndex > 0 ? flatChapters[currentIndex - 1] : undefined;
+  const nextChapter =
+    currentIndex >= 0 && currentIndex < flatChapters.length - 1
+      ? flatChapters[currentIndex + 1]
+      : undefined;
 
   function closePanel() {
     setPanelOpen(false);
@@ -131,8 +142,29 @@ export function WorkbenchShell({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [panelOpen]);
 
+  // 软键盘：用 visualViewport 把底部操作栏抬到键盘上方；不支持的环境保持原样
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const shell = shellRef.current;
+    if (!viewport || !shell) return;
+
+    function updateKeyboardInset() {
+      const inset = Math.max(0, window.innerHeight - viewport!.height - viewport!.offsetTop);
+      shell!.style.setProperty('--wb-keyboard-inset', `${Math.round(inset)}px`);
+    }
+
+    updateKeyboardInset();
+    viewport.addEventListener('resize', updateKeyboardInset);
+    viewport.addEventListener('scroll', updateKeyboardInset);
+    return () => {
+      viewport.removeEventListener('resize', updateKeyboardInset);
+      viewport.removeEventListener('scroll', updateKeyboardInset);
+    };
+  }, []);
+
   return (
     <div
+      ref={shellRef}
       className="wb-shell wb-scope"
       data-testid="workbench-root"
       data-rail-open={String(railOpen)}
@@ -185,6 +217,14 @@ export function WorkbenchShell({
           <div className="wb-shell-rail-heading">
             <span>{railTitle}</span>
             <span>{totalChapters} 章</span>
+            <button
+              type="button"
+              className="wb-shell-rail-close"
+              aria-label="关闭目录"
+              onClick={() => setRailOpen(false)}
+            >
+              关闭
+            </button>
           </div>
 
           {railTabs && railTabs.length > 1 ? (
@@ -297,6 +337,62 @@ export function WorkbenchShell({
           {children}
         </main>
       </div>
+
+      <div
+        className="wb-shell-scrim"
+        data-open={railOpen || panelOpen ? 'true' : 'false'}
+        aria-hidden="true"
+        onClick={() => {
+          setRailOpen(false);
+          if (panelOpen) closePanel();
+        }}
+      />
+
+      <nav className="wb-mobile-bar" aria-label="写作操作栏">
+        <button
+          type="button"
+          aria-label="打开目录"
+          aria-expanded={railOpen}
+          aria-controls="wb-chapter-rail"
+          onClick={() => {
+            setPanelOpen(false);
+            setRailOpen((open) => !open);
+          }}
+        >
+          目录
+        </button>
+        <button
+          type="button"
+          aria-label="上一章"
+          disabled={!previousChapter}
+          onClick={() => previousChapter && selectChapter(previousChapter.id)}
+        >
+          上一章
+        </button>
+        <button
+          type="button"
+          aria-label="下一章"
+          disabled={!nextChapter}
+          onClick={() => nextChapter && selectChapter(nextChapter.id)}
+        >
+          下一章
+        </button>
+        <button
+          type="button"
+          aria-label="打开本章"
+          aria-expanded={panelOpen}
+          aria-controls="wb-chapter-panel"
+          onClick={() => {
+            setRailOpen(false);
+            setPanelOpen((open) => !open);
+          }}
+        >
+          本章
+        </button>
+        <button type="button" aria-label="AI 写作" disabled={!onOpenAi} onClick={onOpenAi}>
+          AI
+        </button>
+      </nav>
 
       {sidePanel ? (
         <aside

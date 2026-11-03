@@ -158,6 +158,10 @@ export interface ChapterEditorHandle {
   discard: () => void;
   /** 作者备忘：并入编辑器串行保存队列，保存失败时与正文一样可重试 */
   saveNote: (note: string) => Promise<boolean>;
+  /** 移动端底部 AI 菜单：打开生成面板 */
+  openGenerate: () => void;
+  /** 移动端底部 AI 菜单：打开段落加工（按当前选区） */
+  openRevise: () => void;
 }
 
 /**
@@ -441,6 +445,8 @@ export function ChapterEditorScreen({
         scheduleSave({ note });
         return flush.current();
       },
+      openGenerate: () => openGenerateSheet(),
+      openRevise: () => openReviseSheet(),
     }),
     [],
   );
@@ -894,6 +900,7 @@ export function ChapterEditorScreen({
 
   const lastUndoEntry = historyRef.current[historyRef.current.length - 1];
   const undoBlocked = canUndo && lastUndoEntry !== undefined && content !== lastUndoEntry.after;
+  const selectedText = normalizeSelection(content, selectionRange.start, selectionRange.end).text;
 
   /** 保存失败时的「带走草稿」出口：不依赖数据库，把当前标题与正文下载成 txt */
   function exportDraft() {
@@ -1244,6 +1251,16 @@ export function ChapterEditorScreen({
         </div>
       ) : null}
 
+      {/* 移动端选区工具条：固定悬浮、不推动正文；只显示在 <768 的 CSS 断点 */}
+      {selectedText.trim() && !generateOpen && !reviseOpen ? (
+        <div className="editor-selection-bar" aria-label="选区工具条">
+          <span>已选 {countWords(selectedText)} 字</span>
+          <button type="button" onClick={openReviseSheet}>
+            加工选段
+          </button>
+        </div>
+      ) : null}
+
       <textarea
         ref={textareaRef}
         value={content}
@@ -1267,7 +1284,7 @@ export function ChapterEditorScreen({
         ].join(' ')}
       />
 
-      <footer className="safe-bottom shrink-0 border-t border-ink-100 bg-paper-raised px-3 py-2 lg:pb-3">
+      <footer className="editor-footer safe-bottom shrink-0 border-t border-ink-100 bg-paper-raised px-3 py-2 lg:pb-3">
         <div className="reading-column flex gap-2 lg:px-1">
           <Button
             variant="secondary"

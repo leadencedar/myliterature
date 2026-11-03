@@ -511,6 +511,13 @@
   color: var(--color-ink-900);
 }
 
+.wb-mobile-bar,
+.wb-shell-scrim,
+.wb-shell-rail-close,
+.editor-selection-bar {
+  display: none;
+}
+
 /* ------------------------------------------------- 1024–1279：章节栏浮层 */
 
 @media (min-width: 1024px) and (max-width: 1279px) {
@@ -558,7 +565,7 @@
     top: 0;
     bottom: 0;
     left: 0;
-    z-index: 20;
+    z-index: 50;
     width: 280px;
     visibility: hidden;
     transform: translateX(-8px);
@@ -574,5 +581,174 @@
   .wb-shell-editor {
     flex: 1;
     padding-bottom: 88px;
+  }
+
+  /* 1024 以下：本章变全屏 Sheet，带返回正文（关闭） */
+  .wb-shell-panel {
+    inset: 0;
+    z-index: 50;
+    width: 100%;
+    max-width: none;
+    border-left: 0;
+    transform: translateY(100%);
+    transition:
+      transform 180ms ease,
+      visibility 180ms ease;
+  }
+
+  .wb-shell[data-panel-open='true'] .wb-shell-panel {
+    visibility: visible;
+    transform: none;
+  }
+
+  .wb-shell-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    background: rgb(20 24 31 / 28%);
+  }
+
+  .wb-shell-scrim[data-open='true'] {
+    display: block;
+  }
+}
+
+/* ----------------------------------- <768：移动端全屏编辑器 + 底部操作栏 */
+
+@media (max-width: 767px) {
+  .wb-shell {
+    height: calc(100dvh - var(--wb-keyboard-inset, 0px));
+    min-height: 0;
+  }
+
+  .wb-shell-editor {
+    padding-bottom: calc(132px + env(safe-area-inset-bottom, 0px) + var(--wb-keyboard-inset, 0px));
+  }
+
+  /* 移动端 AI 操作在底部操作栏的「AI」菜单里，不再重复一条编辑器底栏 */
+  .wb-shell-editor .editor-footer {
+    display: none;
+  }
+
+  /* 目录：底部 Sheet */
+  .wb-shell-rail {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    max-height: 76dvh;
+    overflow-y: auto;
+    border-top: 1px solid var(--color-ink-100);
+    border-right: 0;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -8px 32px rgb(20 24 31 / 14%);
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    transform: translateY(110%);
+    transition:
+      transform 180ms ease,
+      visibility 180ms ease;
+  }
+
+  .wb-shell[data-rail-open='true'] .wb-shell-rail {
+    visibility: visible;
+    transform: none;
+  }
+
+  .wb-shell-rail-close {
+    display: inline-flex;
+    margin-left: auto;
+    border: 0;
+    border-radius: 6px;
+    background: var(--color-paper-sunken);
+    padding: 2px 7px;
+    color: var(--color-ink-500);
+    font: inherit;
+    font-size: 10px;
+    cursor: pointer;
+  }
+
+  .wb-shell-rail-heading {
+    align-items: center;
+  }
+
+  .wb-mobile-bar {
+    position: fixed;
+    right: 0;
+    bottom: max(calc(60px + env(safe-area-inset-bottom, 0px)), var(--wb-keyboard-inset, 0px));
+    left: 0;
+    z-index: 30;
+    display: flex;
+    height: 56px;
+    border-top: 1px solid var(--color-ink-100);
+    background: color-mix(in srgb, var(--color-paper-raised) 94%, transparent);
+    backdrop-filter: blur(8px);
+  }
+
+  .wb-mobile-bar button {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    border: 0;
+    background: transparent;
+    padding: 4px 2px;
+    color: var(--color-ink-700);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .wb-mobile-bar button[aria-expanded='true'] {
+    color: var(--color-seal);
+  }
+
+  .wb-mobile-bar button:disabled {
+    color: var(--color-ink-300);
+    cursor: not-allowed;
+  }
+
+  /* 选区工具条固定在操作栏上方，不推动正文，也不遮挡选文 */
+  .editor-selection-bar {
+    position: fixed;
+    right: 12px;
+    bottom: max(
+      calc(124px + env(safe-area-inset-bottom, 0px)),
+      calc(var(--wb-keyboard-inset, 0px) + 8px)
+    );
+    left: 12px;
+    z-index: 29;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: 1px solid var(--color-ink-100);
+    border-radius: 10px;
+    background: var(--color-paper-raised);
+    padding: 6px 8px 6px 12px;
+    box-shadow: 0 4px 18px rgb(20 24 31 / 12%);
+    color: var(--color-ink-500);
+    font-size: 11px;
+  }
+
+  .editor-selection-bar button {
+    margin-left: auto;
+    border: 0;
+    border-radius: 7px;
+    background: var(--color-paper-sunken);
+    padding: 5px 9px;
+    color: var(--color-ink-700);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wb-shell-rail,
+    .wb-shell-panel {
+      transition: none;
+    }
   }
 }
