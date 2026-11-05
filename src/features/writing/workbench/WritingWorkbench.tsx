@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from
 import { useNavigate } from 'react-router-dom';
 import type { KnowledgeEntry, OutlineNode } from '@/domain/schema';
 import { ChapterEditorScreen, type ChapterEditorHandle } from '../ChapterEditorScreen';
+import { Sheet } from '@/ui/Sheet';
 import { ChapterPlanPanel } from './ChapterPlanPanel';
 import {
   WorkbenchShell,
@@ -67,6 +68,7 @@ export function WritingWorkbench({
   }, [editor.chapter.id, onEditorHandle]);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const [leaveHref, setLeaveHref] = useState<string | null>(null);
+  const [aiOpen, setAiOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [leaveError, setLeaveError] = useState<string | null>(null);
 
@@ -161,6 +163,7 @@ export function WritingWorkbench({
         railTabs={railTabs}
         outlineView={outlineView}
         railActions={railActions}
+        onOpenAi={() => setAiOpen(true)}
         sidePanel={
           panel
             ? (close) => (
@@ -184,6 +187,37 @@ export function WritingWorkbench({
           editorRef={editorRef}
         />
       </WorkbenchShell>
+
+      <Sheet
+        open={aiOpen}
+        title="AI 写作"
+        description="选一个动作；生成/加工面板保持现有完整能力。"
+        onClose={() => setAiOpen(false)}
+        size="dialog"
+      >
+        <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setAiOpen(false);
+              editorRef.current?.openGenerate();
+            }}
+            className="rounded-lg bg-ink-900 px-3 py-2.5 text-sm font-medium text-paper"
+          >
+            生成本章
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setAiOpen(false);
+              editorRef.current?.openRevise();
+            }}
+            className="rounded-lg border border-ink-100 bg-paper px-3 py-2.5 text-sm text-ink-700"
+          >
+            加工这一段
+          </button>
+        </div>
+      </Sheet>
 
       {leaveHref ? (
         <div

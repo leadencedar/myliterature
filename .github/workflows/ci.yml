@@ -49,7 +49,7 @@ jobs:
   ui-width:
     name: UI 宽度验收
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: 检出代码
         uses: actions/checkout@v7
@@ -71,7 +71,7 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
 
       - name: 安装 Chromium
-        run: npx playwright-core install --with-deps chromium
+        run: npx playwright-core install --with-deps chromium --only-shell
 
       - name: 夹具宽度验收
         run: npm run ui:width

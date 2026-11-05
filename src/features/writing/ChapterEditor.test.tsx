@@ -2077,6 +2077,49 @@ describe('内联编辑器（默认工作台）', () => {
     });
   });
 
+  it('移动端操作栏提供目录、切章、本章与 AI 入口', async () => {
+    await harness.repository.createChapter(novel.id, {
+      title: '第1章 雪夜',
+      outlineNodeId: chapterNode.id,
+    });
+    await harness.repository.createChapter(novel.id, { title: '第2章 霜降' });
+
+    const user = userEvent.setup();
+    harness.renderUI(<WritingPage />);
+    await waitForLoaded();
+    await user.click(await screen.findByRole('button', { name: '继续写第 1 章' }));
+    await screen.findByLabelText('章节正文');
+
+    expect(screen.getByRole('button', { name: '打开目录' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '上一章' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '下一章' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '打开本章' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'AI 写作' })).toBeInTheDocument();
+
+    // 下一章：先 flush 再切
+    await user.click(screen.getByRole('button', { name: '下一章' }));
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toHaveValue('第2章 霜降'));
+    expect(screen.getByRole('button', { name: '上一章' })).toBeEnabled();
+
+    // 本章面板
+    await user.click(screen.getByRole('button', { name: '打开本章' }));
+    expect(await screen.findByTestId('chapter-plan-panel')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '关闭本章面板' }));
+
+    // AI 菜单
+    await user.click(screen.getByRole('button', { name: 'AI 写作' }));
+    const ai = await screen.findByRole('dialog', { name: 'AI 写作' });
+    expect(within(ai).getByRole('button', { name: '生成本章' })).toBeInTheDocument();
+    expect(within(ai).getByRole('button', { name: '加工这一段' })).toBeInTheDocument();
+    await user.click(within(ai).getByRole('button', { name: '关闭' }));
+
+    // 目录
+    const directory = screen.getByRole('button', { name: '打开目录' });
+    await user.click(directory);
+    expect(directory).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('chapter-rail')).toBeInTheDocument();
+  });
+
   it('右栏「本章」可保存大纲目标与作者备忘', async () => {
     await harness.repository.createChapter(novel.id, {
       title: '第1章 雪夜',
