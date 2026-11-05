@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useActiveNovel } from '@/app/store/useActiveNovel';
 import { toLocalDate } from '@/domain/primitives';
@@ -1958,5 +1959,121 @@ describe('保存失败恢复与串行保存（审计 §3.1）', () => {
     });
     // 进度补记成功后，提示消失
     await waitFor(() => expect(screen.queryByText(/写作进度未记录/u)).not.toBeInTheDocument());
+  });
+});
+
+describe('阶段 2 · 内联编辑器（dev 预览）', () => {
+  it('以内联 region 挂在工作台壳里，并能从章节栏切章', async () => {
+    await harness.repository.createChapter(novel.id, {
+      title: '第1章 雪夜',
+      outlineNodeId: chapterNode.id,
+    });
+    await harness.repository.createChapter(novel.id, { title: '第2章 霜降' });
+
+    const user = userEvent.setup();
+    harness.renderUI(<WritingPage />, '/write?inline-editor=1');
+    await waitForLoaded();
+
+    await user.click(await screen.findByRole('button', { name: '继续写第 1 章' }));
+    await screen.findByLabelText('章节正文');
+
+    // inline 不是模态：没有 dialog，改为工作台内的 region
+    expect(screen.getByTestId('chapter-editor-inline')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // 输入后立刻切章：切章前由 editorRef.flush() 保证不丢稿
+    await user.type(screen.getByLabelText('章节正文'), '切章前写的内容。');
+    await user.click(screen.getByRole('button', { name: /第2章 霜降/u }));
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toHaveValue('第2章 霜降'));
+    expect(screen.getByTestId('chapter-editor-inline')).toBeInTheDocument();
+    await waitFor(async () => {
+      const chapters = await harness.repository.listChapters(novel.id);
+      const first = chapters.find((item) => item.title === '第1章 雪夜');
+      expect(first?.content).toBe('切章前写的内容。');
+    });
+  });
+
+  it('内联模式下保存失败时退出被拦住，重试成功后才回到页面', async () => {
+    await harness.repository.createChapter(novel.id, {
+      title: '第1章 雪夜',
+      outlineNodeId: chapterNode.id,
+    });
+
+    const user = userEvent.setup();
+    harness.renderUI(<WritingPage />, '/write?inline-editor=1');
+    await waitForLoaded();
+    await user.click(await screen.findByRole('button', { name: '继续写第 1 章' }));
+    await screen.findByLabelText('章节正文');
+
+    const update = vi
+      .spyOn(harness.repository, 'updateChapter')
+      .mockRejectedValue(new Error('磁盘写满'));
+    await user.type(screen.getByLabelText('章节正文'), '别丢。');
+    fireEvent.keyDown(document, { key: 's', ctrlKey: true });
+    expect(await screen.findByText('保存失败')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '返回' }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.getByLabelText('章节正文')).toHaveValue('别丢。');
+
+    update.mockRestore();
+    await user.click(screen.getByRole('button', { name: '重试保存' }));
+    await waitFor(() => expect(screen.queryByLabelText('章节正文')).not.toBeInTheDocument());
+    await waitFor(async () => {
+      const chapters = await harness.repository.listChapters(novel.id);
+      expect(chapters[0]?.content).toBe('别丢。');
+    });
+  });
+
+  it('有未保存内容时离开写作页，先保存再导航', async () => {
+    await harness.repository.createChapter(novel.id, {
+      title: '第1章 雪夜',
+      outlineNodeId: chapterNode.id,
+    });
+
+    const user = userEvent.setup();
+    harness.renderUI(
+      <>
+        <a href="/shelf">去书架</a>
+        <Routes>
+          <Route path="/write" element={<WritingPage />} />
+          <Route path="/shelf" element={<p>书架占位</p>} />
+        </Routes>
+      </>,
+      '/write?inline-editor=1',
+    );
+    await waitForLoaded();
+    await user.click(await screen.findByRole('button', { name: '继续写第 1 章' }));
+    await screen.findByLabelText('章节正文');
+    await user.type(screen.getByLabelText('章节正文'), '离开前保存。');
+
+    // 点站内链接：守卫拦截，先弹出确认
+    await user.click(screen.getByRole('link', { name: '去书架' }));
+    const dialog = await screen.findByRole('dialog', { name: '还有内容没保存' });
+    await user.click(within(dialog).getByRole('button', { name: '保存并离开' }));
+
+    expect(await screen.findByText('书架占位')).toBeInTheDocument();
+    await waitFor(async () => {
+      const chapters = await harness.repository.listChapters(novel.id);
+      expect(chapters[0]?.content).toBe('离开前保存。');
+    });
+  });
+
+  it('外传章节在章节栏按分组显示', async () => {
+    await harness.repository.createChapter(novel.id, {
+      title: '第1章 雪夜',
+      outlineNodeId: chapterNode.id,
+    });
+    const story = await harness.repository.createSideStory(novel.id, { title: '青冥旧事' });
+    await harness.repository.createChapter(novel.id, { title: '渡口', sideStoryId: story.id });
+
+    const user = userEvent.setup();
+    harness.renderUI(<WritingPage />, '/write?inline-editor=1');
+    await waitForLoaded();
+    await user.click(await screen.findByRole('button', { name: '继续写第 1 章' }));
+    await screen.findByLabelText('章节正文');
+
+    expect(screen.getByRole('heading', { name: '外传·青冥旧事' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /渡口/u })).toBeInTheDocument();
   });
 });

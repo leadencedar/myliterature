@@ -1,0 +1,1450 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>文墨 UI v2 · 选择已记录（可比界面）</title>
+    <style>
+      :root {
+        --paper: #fdfcfa;
+        --raised: #ffffff;
+        --sunken: #f4f2ee;
+        --ink: #14181f;
+        --ink-700: #333a45;
+        --ink-500: #5c6675;
+        --ink-300: #98a1ae;
+        --line: #dfe2e7;
+        --seal: #d9561f;
+        --seal-soft: #fdf1ec;
+        --accent: #b0751f;
+        --accent-soft: #fbf3e4;
+        --success: #3f6b4a;
+        --success-soft: #eef3ee;
+        --radius: 12px;
+        --ui:
+          -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+          'Noto Sans SC', sans-serif;
+        --song: 'Songti SC', 'Source Han Serif SC', 'Noto Serif SC', STSong, Georgia, serif;
+        --hei: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        -webkit-text-size-adjust: 100%;
+      }
+      body {
+        margin: 0;
+        background: var(--sunken);
+        color: var(--ink);
+        font-family: var(--ui);
+        line-height: 1.6;
+        padding-bottom: 88px;
+      }
+      :focus-visible {
+        outline: 2px solid var(--seal);
+        outline-offset: 3px;
+      }
+      .wrap {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 28px 20px 40px;
+      }
+      header.top {
+        margin-bottom: 22px;
+      }
+      .crumb {
+        font-size: 12px;
+        color: var(--ink-500);
+        letter-spacing: 0.02em;
+      }
+      h1 {
+        font-size: 26px;
+        line-height: 1.35;
+        margin: 6px 0 8px;
+        letter-spacing: -0.01em;
+      }
+      .lead {
+        margin: 0;
+        max-width: 760px;
+        color: var(--ink-700);
+        font-size: 14px;
+      }
+      .caveat {
+        margin-top: 12px;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--paper);
+        color: var(--ink-500);
+        font-size: 12.5px;
+      }
+      .recorded {
+        margin: 0 0 18px;
+        border: 1px solid var(--ink);
+        border-radius: 10px;
+        background: #fff;
+        padding: 12px 14px;
+        font-size: 13px;
+        color: var(--ink-700);
+        line-height: 1.7;
+      }
+      .recorded strong {
+        color: var(--ink);
+      }
+      .recorded .sub {
+        display: block;
+        margin-top: 4px;
+        font-size: 11.5px;
+        color: var(--ink-500);
+      }
+      .card {
+        background: var(--raised);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 20px;
+        margin-top: 18px;
+      }
+      .card-head {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 4px;
+      }
+      .qno {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 34px;
+        height: 24px;
+        padding: 0 8px;
+        border-radius: 999px;
+        background: var(--ink);
+        color: var(--paper);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+      }
+      .card h2 {
+        font-size: 17px;
+        margin: 0;
+      }
+      .card p.desc {
+        margin: 6px 0 16px;
+        color: var(--ink-500);
+        font-size: 13px;
+      }
+      .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        line-height: 1.6;
+        background: var(--accent-soft);
+        color: var(--accent);
+        border: 1px solid #eadcc2;
+        white-space: nowrap;
+      }
+      .badge.seal {
+        background: var(--seal-soft);
+        color: var(--seal);
+        border-color: #f2d6c8;
+      }
+      .badge.ok {
+        background: var(--success-soft);
+        color: var(--success);
+        border-color: #d8e5d8;
+      }
+      .opts {
+        display: grid;
+        gap: 12px;
+      }
+      .opts.two {
+        grid-template-columns: 1fr 1fr;
+      }
+      .opts.three {
+        grid-template-columns: repeat(3, 1fr);
+      }
+      .opts.nav-list {
+        grid-template-columns: 1fr;
+      }
+      @media (max-width: 860px) {
+        .opts.two,
+        .opts.three {
+          grid-template-columns: 1fr;
+        }
+      }
+      .opt {
+        position: relative;
+        display: block;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--paper);
+        padding: 14px;
+        cursor: pointer;
+        transition:
+          border-color 120ms ease,
+          background-color 120ms ease;
+      }
+      .opt:hover {
+        border-color: var(--ink-300);
+      }
+      .opt:has(> input[type='radio']:checked) {
+        border-color: var(--ink);
+        background: #fff;
+        box-shadow: 0 0 0 1px var(--ink);
+      }
+      .opt:has(> input[type='radio']:focus-visible) {
+        outline: 2px solid var(--seal);
+        outline-offset: 3px;
+      }
+      .opt input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+      }
+      .opt-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .radio-dot {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        border: 1.5px solid var(--ink-300);
+        flex: none;
+        position: relative;
+      }
+      .opt:has(> input[type='radio']:checked) .radio-dot {
+        border-color: var(--ink);
+      }
+      .opt:has(> input[type='radio']:checked) .radio-dot::after {
+        content: '';
+        position: absolute;
+        inset: 3px;
+        border-radius: 50%;
+        background: var(--ink);
+      }
+      .opt small {
+        display: block;
+        margin-top: 6px;
+        color: var(--ink-500);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+      .opt .note {
+        margin-top: 8px;
+        font-size: 11.5px;
+        color: var(--ink-500);
+      }
+      /* ---------- Q1 字体 ---------- */
+      .font-previews {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 16px;
+        margin-top: 16px;
+        min-width: 0;
+      }
+      .preview-label {
+        font-size: 12px;
+        color: var(--ink-500);
+        margin-bottom: 6px;
+      }
+      .mini-editor {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        padding: 14px 16px 16px;
+        min-width: 0;
+        max-width: 100%;
+      }
+      .mini-editor.wide-a {
+        width: 760px;
+      }
+      .mini-editor.wide-b {
+        width: 680px;
+      }
+      .mini-editor .mini-meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
+        font-size: 11px;
+        color: var(--ink-500);
+        padding-bottom: 10px;
+        border-bottom: 1px solid var(--line);
+      }
+      .mini-editor .mini-title {
+        margin: 12px 0 8px;
+        font-size: 22px;
+        font-weight: 600;
+      }
+      .sample-a {
+        font-family: var(--song);
+        font-size: 19px;
+        line-height: 2.1;
+        color: var(--ink);
+        letter-spacing: 0.01em;
+      }
+      .sample-b {
+        font-family: var(--hei);
+        font-size: 17px;
+        line-height: 1.85;
+        color: var(--ink);
+      }
+      .measure {
+        font-size: 11px;
+        color: var(--ink-500);
+        margin-top: 10px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .measure b {
+        color: var(--ink);
+        font-weight: 600;
+      }
+      /* ---------- Q2 导航 ---------- */
+      .vp-tabs {
+        display: inline-flex;
+        gap: 4px;
+        padding: 4px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--sunken);
+        margin-bottom: 14px;
+      }
+      .vp-tabs button {
+        appearance: none;
+        border: 0;
+        background: transparent;
+        color: var(--ink-500);
+        font: inherit;
+        font-size: 12.5px;
+        padding: 5px 12px;
+        border-radius: 999px;
+        cursor: pointer;
+      }
+      .vp-tabs button[aria-pressed='true'] {
+        background: #fff;
+        color: var(--ink);
+        box-shadow: 0 1px 2px rgb(20 24 31 / 12%);
+      }
+      .nav-option {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--paper);
+        padding: 14px;
+      }
+      .nav-option.selected {
+        border-color: var(--ink);
+        box-shadow: 0 0 0 1px var(--ink);
+        background: #fff;
+      }
+      .nav-option .opt-head {
+        justify-content: space-between;
+      }
+      .bar {
+        display: flex;
+        height: 40px;
+        width: 100%;
+        max-width: 720px;
+        border-radius: 6px;
+        overflow: hidden;
+        margin: 12px 0 10px;
+        border: 1px solid var(--line);
+        background: var(--sunken);
+      }
+      .bar span {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        color: #fff;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .seg-nav {
+        background: var(--ink-700);
+      }
+      .seg-rail {
+        background: #8a93a1;
+      }
+      .seg-editor {
+        background: #c9b9a7;
+        color: #33281e;
+      }
+      .seg-pad {
+        background: repeating-linear-gradient(
+          45deg,
+          #efeae2,
+          #efeae2 5px,
+          #e7e0d5 5px,
+          #e7e0d5 10px
+        );
+        flex: 1;
+        color: var(--ink-500);
+      }
+      .nav-read {
+        font-size: 12.5px;
+        color: var(--ink-700);
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .nav-read b {
+        font-weight: 600;
+      }
+      .nav-read .warn {
+        color: var(--seal);
+      }
+      .legend {
+        display: flex;
+        gap: 14px;
+        flex-wrap: wrap;
+        font-size: 11px;
+        color: var(--ink-500);
+        margin-bottom: 4px;
+      }
+      .legend i {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        margin-right: 5px;
+        vertical-align: -1px;
+      }
+      .overlay-note {
+        font-size: 11px;
+        color: var(--ink-500);
+        margin-top: 6px;
+      }
+      /* ---------- Q3 右栏 ---------- */
+      .panel-stage {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 12px;
+      }
+      @media (max-width: 980px) {
+        .panel-stage {
+          grid-template-columns: 1fr;
+        }
+      }
+      .mini-panel {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        padding: 12px;
+        font-size: 12px;
+        color: var(--ink-700);
+        min-width: 0;
+      }
+      .mini-panel h4 {
+        margin: 0 0 8px;
+        font-size: 12px;
+        color: var(--ink);
+      }
+      .mini-panel .block {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--paper);
+        padding: 7px 8px;
+        line-height: 1.65;
+        margin-bottom: 9px;
+      }
+      .mini-panel .label {
+        font-size: 10.5px;
+        color: var(--ink-500);
+        margin-bottom: 4px;
+      }
+      .chip-row {
+        display: flex;
+        gap: 5px;
+        flex-wrap: wrap;
+        margin-bottom: 9px;
+      }
+      .chip {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 2px 7px;
+        font-size: 10.5px;
+        background: var(--paper);
+        color: var(--ink-700);
+      }
+      .mini-btn {
+        display: inline-block;
+        border-radius: 5px;
+        padding: 4px 8px;
+        font-size: 11px;
+        background: var(--ink);
+        color: var(--paper);
+        margin-right: 5px;
+      }
+      .mini-btn.ghost {
+        background: var(--paper);
+        color: var(--ink);
+        border: 1px solid var(--line);
+      }
+      .beats label {
+        display: flex;
+        gap: 7px;
+        align-items: flex-start;
+        padding: 4px 0;
+      }
+      .beats input {
+        margin: 4px 0 0;
+        accent-color: var(--seal);
+        width: 13px;
+        height: 13px;
+        flex: none;
+      }
+      .beats .done {
+        color: var(--ink-500);
+        text-decoration: line-through;
+      }
+      .memo-box {
+        border: 1px dashed #d8c9b4;
+        border-radius: 6px;
+        background: #fdfaf4;
+        padding: 7px 8px;
+        color: var(--ink-500);
+        line-height: 1.6;
+      }
+      .data-tag {
+        display: inline-block;
+        margin-top: 8px;
+        font-size: 10.5px;
+        color: var(--ink-500);
+      }
+      /* ---------- Q4 命名 ---------- */
+      .name-stage {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-top: 12px;
+      }
+      @media (max-width: 720px) {
+        .name-stage {
+          grid-template-columns: 1fr;
+        }
+      }
+      .name-frame {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--paper);
+        padding: 12px;
+      }
+      .name-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        padding: 9px 11px;
+        font-size: 12.5px;
+        color: var(--ink-700);
+        flex-wrap: wrap;
+      }
+      .name-head .brand {
+        font-weight: 600;
+        color: var(--ink);
+        margin-right: 4px;
+      }
+      .name-head .spacer {
+        flex: 1;
+      }
+      .ghost-btn {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 3px 8px;
+        font-size: 11.5px;
+        color: var(--ink-700);
+        background: #fff;
+      }
+      /* ---------- Q5 右栏组织 ---------- */
+      .ctx-stage {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 12px;
+      }
+      @media (max-width: 980px) {
+        .ctx-stage {
+          grid-template-columns: 1fr;
+        }
+      }
+      .ctx-panel {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        overflow: hidden;
+        font-size: 12px;
+        display: flex;
+        flex-direction: column;
+        min-height: 300px;
+      }
+      .ctx-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        padding: 8px 9px;
+        border-bottom: 1px solid var(--line);
+        background: var(--paper);
+        font-size: 11px;
+        color: var(--ink-700);
+        font-weight: 600;
+      }
+      .ctx-close {
+        color: var(--ink-300);
+        font-weight: 400;
+      }
+      .ctx-body {
+        padding: 4px 9px 8px;
+        flex: 1;
+      }
+      .ctx-row {
+        border-bottom: 1px solid var(--line);
+        padding: 7px 0;
+      }
+      .ctx-row:last-child {
+        border-bottom: 0;
+      }
+      .ctx-row-head {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-weight: 600;
+        color: var(--ink);
+        font-size: 11.5px;
+      }
+      .ctx-row-head .chev {
+        color: var(--ink-500);
+        font-size: 10px;
+        width: 9px;
+      }
+      .ctx-row-head .meta {
+        margin-left: auto;
+        color: var(--ink-500);
+        font-weight: 400;
+        font-size: 10.5px;
+      }
+      .ctx-summary {
+        margin: 5px 0 0 14px;
+        color: var(--ink-700);
+        line-height: 1.65;
+        font-size: 11px;
+      }
+      .ctx-edit {
+        margin-left: 14px;
+        color: var(--seal);
+        font-size: 10.5px;
+      }
+      .ctx-actions {
+        display: flex;
+        gap: 5px;
+        padding: 7px 9px;
+        border-top: 1px solid var(--line);
+        background: var(--paper);
+        flex-wrap: wrap;
+      }
+      .ctx-tabs {
+        display: flex;
+        gap: 3px;
+        padding: 5px 6px;
+        border-bottom: 1px solid var(--line);
+        background: var(--paper);
+        font-size: 10.5px;
+      }
+      .ctx-tabs span {
+        border-radius: 5px;
+        padding: 3px 7px;
+        color: var(--ink-500);
+      }
+      .ctx-tabs span.on {
+        background: #fff;
+        color: var(--ink);
+        box-shadow: 0 0 0 1px var(--line);
+      }
+      .ctx-note {
+        margin-top: 8px;
+        font-size: 10.5px;
+        color: var(--ink-500);
+        line-height: 1.55;
+      }
+      /* ---------- 汇总 ---------- */
+      .summary-bar {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 20;
+        background: rgb(253 252 250 / 96%);
+        backdrop-filter: blur(8px);
+        border-top: 1px solid var(--line);
+        padding: 10px 20px calc(10px + env(safe-area-inset-bottom, 0px));
+      }
+      .summary-inner {
+        max-width: 1120px;
+        margin: 0 auto;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .summary-text {
+        flex: 1;
+        min-width: 240px;
+        font-size: 12.5px;
+        color: var(--ink-700);
+      }
+      .summary-text b {
+        color: var(--ink);
+      }
+      .btn {
+        appearance: none;
+        border: 1px solid var(--ink);
+        border-radius: 8px;
+        background: var(--ink);
+        color: var(--paper);
+        font: inherit;
+        font-size: 12.5px;
+        padding: 7px 14px;
+        cursor: pointer;
+      }
+      .btn.ghost {
+        background: transparent;
+        color: var(--ink);
+      }
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 92px;
+        transform: translateX(-50%);
+        background: var(--ink);
+        color: var(--paper);
+        border-radius: 8px;
+        padding: 8px 14px;
+        font-size: 12.5px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 160ms ease;
+        z-index: 30;
+      }
+      .toast.show {
+        opacity: 1;
+      }
+      .foot {
+        margin-top: 22px;
+        color: var(--ink-500);
+        font-size: 11.5px;
+        line-height: 1.7;
+      }
+      @media (max-width: 600px) {
+        body {
+          padding-bottom: 168px;
+        }
+        .summary-inner {
+          gap: 8px;
+        }
+        .summary-text {
+          min-width: 100%;
+        }
+        .wrap {
+          padding: 20px 14px 32px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="top">
+        <div class="crumb">文墨 · UI v2 · P0 评审材料</div>
+        <h1>文墨 UI v2 · 选择已记录（2026-11-01）</h1>
+        <p class="lead">
+          对应《UI-v2-P0-设计规格草稿》第 0 节。本页记录这 5
+          个影响创作与浏览习惯的选项，不是最终设计稿；配色、暗色、四态状态、全局命令面板都不在本轮选择范围。
+        </p>
+        <div class="caveat">
+          选择不会上传，只保存在本机浏览器（localStorage）。页面所有宽度是按 CSS
+          计算的近似值（未计滚动条与字体回退），最终以真实浏览器测量为准；推荐值仅供参考，作者可以选不同项。
+        </div>
+      </header>
+
+      <div class="recorded">
+        <strong>已拍板的选择：</strong>Q1 B 黑体 · Q2 A 导航常驻 · Q3 B 只读信息 + 作者备忘 · Q4
+        B「本章」 · Q5 A 上下文检查器
+        <span class="sub"
+          >原推荐为 Q1 A / Q3 A，以本记录为准；下方界面仍可切换，用于回顾差异。</span
+        >
+      </div>
+
+      <!-- ================= Q1 字体 ================= -->
+      <section class="card" aria-labelledby="q1-title">
+        <div class="card-head">
+          <span class="qno">Q1</span>
+          <h2 id="q1-title">正文字体：宋体还是黑体？</h2>
+          <span class="badge seal">已选 B</span>
+        </div>
+        <p class="desc">
+          同样的示例段落、同样的约 40 字/行目标。宋体 19px 需要约 760px，黑体 17px 需要约
+          680px；下面的两块宽度就是各自的「40 字」宽度。
+        </p>
+
+        <div class="opts two" role="radiogroup" aria-labelledby="q1-title">
+          <label class="opt">
+            <input type="radio" name="q1" value="A" />
+            <span class="opt-head"><span class="radio-dot"></span>A · 宋体默认（19px / 2.1）</span>
+            <small
+              >当前实现的手感：长文阅读舒适、气质更文学；黑体作为设置在「外观与阅读」里可切。</small
+            >
+            <div class="measure" style="margin-top: 8px">
+              <span>40 字/行 ≈ <b>760px</b></span>
+            </div>
+          </label>
+          <label class="opt">
+            <input type="radio" name="q1" value="B" />
+            <span class="opt-head"><span class="radio-dot"></span>B · 黑体默认（17px / 1.85）</span>
+            <small
+              >更接近新方向原型的工具感；但会改变现有阅读手感，且需要重新校准所有行宽。宋体作为可选项。</small
+            >
+            <div class="measure" style="margin-top: 8px">
+              <span>40 字/行 ≈ <b>680px</b></span>
+            </div>
+          </label>
+        </div>
+
+        <div class="font-previews">
+          <div>
+            <div class="preview-label">
+              A · 宋体 19px / 2.1 · 按 760px 宽渲染（当前窗口放得下就按实际尺寸）
+            </div>
+            <div class="mini-editor wide-a">
+              <div class="mini-meta">
+                <span>宋体 · 19px · 行高 2.1</span><span>每行约 40 字</span>
+              </div>
+              <p class="mini-title" style="font-family: var(--song)">旧城来信</p>
+              <p class="sample-a" style="margin: 0">
+                旧城的雨，总比别处下得慢。林照沿着石阶往上走，鞋底带起细碎的水声。街角那家书店还亮着灯，灯光落在潮湿的地面上，像一页没有写完的信。
+              </p>
+              <div class="measure">
+                <span>此块宽度 <b>760px</b></span
+                ><span>每行约 <b>40</b> 字</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div class="preview-label">B · 黑体 17px / 1.85 · 按 680px 宽渲染</div>
+            <div class="mini-editor wide-b">
+              <div class="mini-meta">
+                <span>黑体 · 17px · 行高 1.85</span><span>每行约 40 字</span>
+              </div>
+              <p class="mini-title" style="font-family: var(--hei); font-size: 20px">旧城来信</p>
+              <p class="sample-b" style="margin: 0">
+                旧城的雨，总比别处下得慢。林照沿着石阶往上走，鞋底带起细碎的水声。街角那家书店还亮着灯，灯光落在潮湿的地面上，像一页没有写完的信。
+              </p>
+              <div class="measure">
+                <span>此块宽度 <b>680px</b></span
+                ><span>每行约 <b>40</b> 字</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= Q2 导航密度 ================= -->
+      <section class="card" aria-labelledby="q2-title">
+        <div class="card-head">
+          <span class="qno">Q2</span>
+          <h2 id="q2-title">桌面导航密度：全局侧栏常驻，还是写作时收窄？</h2>
+          <span class="badge">已选 A</span>
+        </div>
+        <p class="desc">
+          三段色块从「全局导航 / 章节栏 /
+          正文区」依次排开；切换下方视口宽度看正文还剩多少。正文上限按 40 字计算（宋体 19px ≈
+          760px）。
+        </p>
+
+        <div class="vp-tabs" role="group" aria-label="视口宽度">
+          <button type="button" data-vp="1024" aria-pressed="false">1024</button>
+          <button type="button" data-vp="1280" aria-pressed="true">1280</button>
+          <button type="button" data-vp="1440" aria-pressed="false">1440</button>
+        </div>
+        <div class="legend" aria-hidden="true">
+          <span><i style="background: var(--ink-700)"></i>全局导航</span>
+          <span><i style="background: #8a93a1"></i>章节栏</span>
+          <span><i style="background: #c9b9a7"></i>正文</span>
+          <span
+            ><i
+              style="
+                background: repeating-linear-gradient(
+                  45deg,
+                  #efeae2,
+                  #efeae2 5px,
+                  #e7e0d5 5px,
+                  #e7e0d5 10px
+                );
+              "
+            ></i
+            >留白 / 内边距</span
+          >
+        </div>
+
+        <div
+          class="opts three nav-list"
+          role="radiogroup"
+          aria-labelledby="q2-title"
+          style="margin-top: 10px"
+        >
+          <label class="opt nav-option" data-option="A">
+            <input type="radio" name="q2" value="A" />
+            <div class="opt-head">
+              <span class="radio-dot"></span><span>A · 全局导航常驻 224</span>
+            </div>
+            <small
+              >全局 5 Tab 与现状一致；≥1280 章节栏常驻，1024–1279
+              章节栏改为浮层以保住正文宽度。</small
+            >
+            <div class="bar" data-bar="A" aria-hidden="true"></div>
+            <div class="nav-read" data-read="A"></div>
+            <span class="data-tag">改动最小、导航一致性最好</span>
+          </label>
+
+          <label class="opt nav-option" data-option="B">
+            <input type="radio" name="q2" value="B" />
+            <div class="opt-head">
+              <span class="radio-dot"></span><span>B · 写作时折叠为 64 图标轨</span>
+            </div>
+            <small
+              >写作路由把全局导航收成图标轨，正文多出约 160px；离开写作恢复。需要为图标补提示与
+              aria-label。</small
+            >
+            <div class="bar" data-bar="B" aria-hidden="true"></div>
+            <div class="nav-read" data-read="B"></div>
+            <span class="data-tag">正文更宽；但导航形态在路由间不一致</span>
+          </label>
+
+          <label class="opt nav-option" data-option="C">
+            <input type="radio" name="q2" value="C" />
+            <div class="opt-head">
+              <span class="radio-dot"></span><span>C · 写作时隐藏全局导航</span>
+            </div>
+            <small
+              >进入写作即沉浸，只剩章节栏 + 正文；退出写作才能切到其它
+              Tab。与「全局与作品内导航不混放」原则冲突风险最高。</small
+            >
+            <div class="bar" data-bar="C" aria-hidden="true"></div>
+            <div class="nav-read" data-read="C"></div>
+            <span class="data-tag">正文最宽；导航可达性最弱</span>
+          </label>
+        </div>
+        <p class="overlay-note">
+          注：1024–1279 选项 A/B
+          的章节栏为浮层，不占正文列；色块中不再显示章节栏宽度。计算未计滚动条与页面外边距。
+        </p>
+      </section>
+
+      <!-- ================= Q3 章内任务 ================= -->
+      <section class="card" aria-labelledby="q3-title">
+        <div class="card-head">
+          <span class="qno">Q3</span>
+          <h2 id="q3-title">右栏「本章」放什么？</h2>
+          <span class="badge seal">已选 B</span>
+        </div>
+        <p class="desc">
+          三种形态的右栏示意（只比较内容，组织方式见 Q5）。A 零数据迁移；B 新增一个作者备忘字段；C
+          还需要章内节拍模型。A 和 B 都能保留「目标 / 字数 / 资料」；AI 操作的位置由 Q5
+          决定（推荐回编辑器底栏）。
+        </p>
+
+        <div class="opts three" role="radiogroup" aria-labelledby="q3-title">
+          <label class="opt">
+            <input type="radio" name="q3" value="A" />
+            <span class="opt-head"><span class="radio-dot"></span>A · 只读本章信息</span>
+            <small>目标来自大纲梗概；外传显示细纲；不做备忘、不做节拍。P0 零迁移。</small>
+            <div class="mini-panel" style="margin-top: 10px">
+              <h4>本章</h4>
+              <div class="label">本章目标（来自大纲梗概）</div>
+              <div class="block">让林照发现：信件上的日期，比她收到信的日子晚了一天。</div>
+              <div class="label">目标字数</div>
+              <div class="block">3,000 字</div>
+              <div class="chip-row">
+                <span class="chip">人物 · 林照</span><span class="chip">地点 · 南巷书店</span>
+              </div>
+              <div class="data-tag">
+                AI 操作：编辑器底栏（见 Q5） · 数据：synopsis / targetWords / linkedEntryIds
+              </div>
+            </div>
+          </label>
+
+          <label class="opt">
+            <input type="radio" name="q3" value="B" />
+            <span class="opt-head"><span class="radio-dot"></span>B · 只读信息 + 作者备忘</span>
+            <small
+              >增加一块自己的备忘（待改点、下一步想法），不参与 AI/摘要；需要新增 `Chapter.note`
+              并升备份版本。</small
+            >
+            <div class="mini-panel" style="margin-top: 10px">
+              <h4>本章</h4>
+              <div class="label">本章目标</div>
+              <div class="block">让林照发现：信件上的日期，比她收到信的日子晚了一天。</div>
+              <div class="label">作者备忘 · 不进入正文</div>
+              <div class="memo-box">待改：开头两段雨景重复，完成情节后再压缩。</div>
+              <div class="chip-row">
+                <span class="chip">人物 · 林照</span><span class="chip">地点 · 南巷书店</span>
+              </div>
+              <div class="data-tag">
+                AI 操作：编辑器底栏（见 Q5） · 额外数据：Chapter.note（DB v8 + 备份快照）
+              </div>
+            </div>
+          </label>
+
+          <label class="opt">
+            <input type="radio" name="q3" value="C" />
+            <span class="opt-head"><span class="radio-dot"></span>C · 目标 + 节拍 + 备忘</span>
+            <small
+              >再加可勾选场景节拍。需要章内任务模型（独立字段或表），与大纲节点状态分开，工作量和迁移最大。</small
+            >
+            <div class="mini-panel" style="margin-top: 10px">
+              <h4>本章</h4>
+              <div class="label">本章目标</div>
+              <div class="block">让林照发现：信件上的日期，比她收到信的日子晚了一天。</div>
+              <div class="label">场景节拍 <span style="color: var(--ink-500)">1 / 3</span></div>
+              <div class="beats">
+                <label
+                  ><input type="checkbox" checked /><span class="done">抵达南巷书店</span></label
+                >
+                <label><input type="checkbox" /><span>与店主交谈，提到寄信人</span></label>
+                <label><input type="checkbox" /><span>发现日期异常，留下悬念</span></label>
+              </div>
+              <div class="label">作者备忘</div>
+              <div class="memo-box">待改：开头两段雨景重复。</div>
+              <div class="data-tag">额外数据：章内任务模型 + Chapter.note（最大）</div>
+            </div>
+          </label>
+        </div>
+      </section>
+
+      <!-- ================= Q4 命名 ================= -->
+      <section class="card" aria-labelledby="q4-title">
+        <div class="card-head">
+          <span class="qno">Q4</span>
+          <h2 id="q4-title">右栏叫什么？</h2>
+          <span class="badge">已选 B</span>
+        </div>
+        <p class="desc">
+          主导航里已经有「计划」（每日/每周写作目标）。右栏再叫「本章计划」会让手机上出现两个「计划」。名称只影响文案，但会影响帮助、设置和测试。
+        </p>
+        <div class="opts two" role="radiogroup" aria-labelledby="q4-title">
+          <label class="opt">
+            <input type="radio" name="q4" value="A" />
+            <span class="opt-head"><span class="radio-dot"></span>A · 本章计划</span>
+            <small>与主导航「计划」同名；易被理解成写作计划/打卡。</small>
+            <div class="name-stage">
+              <div class="name-frame">
+                <div class="name-head">
+                  <span class="brand">文墨</span><span>雾港来信</span><span class="spacer"></span>
+                  <span class="ghost-btn">推演</span><span class="ghost-btn">本章计划</span>
+                </div>
+              </div>
+            </div>
+          </label>
+          <label class="opt">
+            <input type="radio" name="q4" value="B" />
+            <span class="opt-head"><span class="radio-dot"></span>B · 本章</span>
+            <small>与「计划」区分清楚；内部用「目标 / 资料 / 备忘」等明确名称。</small>
+            <div class="name-stage">
+              <div class="name-frame">
+                <div class="name-head">
+                  <span class="brand">文墨</span><span>雾港来信</span><span class="spacer"></span>
+                  <span class="ghost-btn">推演</span><span class="ghost-btn">本章</span>
+                </div>
+              </div>
+            </div>
+          </label>
+        </div>
+      </section>
+
+      <!-- ================= Q5 右栏组织 ================= -->
+      <section class="card" aria-labelledby="q5-title">
+        <div class="card-head">
+          <span class="qno">Q5</span>
+          <h2 id="q5-title">右栏怎么组织，浏览才不费劲？</h2>
+          <span class="badge">已选 A</span>
+        </div>
+        <p class="desc">
+          右栏的问题是：可编辑信息、只读参考、主操作混在一个 320px
+          抽屉里，要一路滚动才能看全。三种组织方式，核心区别是「主操作放在哪」以及「右栏要不要承载
+          AI」。
+        </p>
+
+        <div class="opts three" role="radiogroup" aria-labelledby="q5-title">
+          <label class="opt">
+            <input type="radio" name="q5" value="A" />
+            <span class="opt-head"><span class="radio-dot"></span>A · 上下文检查器</span>
+            <small
+              >右栏只放「这一章是什么」：目标、资料、备忘、细纲全部折叠成摘要行，一次只展开一节；生成本章/加工固定在编辑器底栏。</small
+            >
+            <div class="ctx-panel" style="margin-top: 10px">
+              <div class="ctx-head">
+                <span>本章 · 第 2 章 · 1,021 字</span><span class="ctx-close">×</span>
+              </div>
+              <div class="ctx-body">
+                <div class="ctx-row">
+                  <div class="ctx-row-head">
+                    <span class="chev">▾</span>本章目标<span class="meta">大纲梗概 · 编辑</span>
+                  </div>
+                  <p class="ctx-summary">让林照发现：信件上的日期，比她收到信的日子晚了一天。</p>
+                </div>
+                <div class="ctx-row">
+                  <div class="ctx-row-head">
+                    <span class="chev">▸</span>资料<span class="meta">5 条</span>
+                  </div>
+                  <p class="ctx-summary">人物 · 林照 / 地点 · 南巷书店 … 查看全部</p>
+                </div>
+                <div class="ctx-row">
+                  <div class="ctx-row-head">
+                    <span class="chev">▸</span>作者备忘<span class="meta">1 行</span>
+                  </div>
+                  <p class="ctx-summary">待改：开头两段雨景重复。</p>
+                </div>
+                <div class="ctx-row">
+                  <div class="ctx-row-head">
+                    <span class="chev">▸</span>本章细纲<span class="meta">外传</span>
+                  </div>
+                  <p class="ctx-summary">仅推演来源的外传章节显示。</p>
+                </div>
+              </div>
+            </div>
+            <div class="ctx-note">
+              编辑器底栏：加工这一段 · 生成本章 · 检查 ▾<br />AI
+              操作不进入右栏，主操作永不随滚动消失。
+            </div>
+          </label>
+
+          <label class="opt">
+            <input type="radio" name="q5" value="B" />
+            <span class="opt-head"><span class="radio-dot"></span>B · 右栏标签页</span>
+            <small
+              >右栏保留 AI，用「本章 / 资料 / AI」三个页签分隔；每个页签内容更短，但切换模式、tab
+              内仍可能滚动。</small
+            >
+            <div class="ctx-panel" style="margin-top: 10px">
+              <div class="ctx-head">
+                <span>本章 · 第 2 章 · 1,021 字</span><span class="ctx-close">×</span>
+              </div>
+              <div class="ctx-tabs">
+                <span class="on">本章</span><span>资料</span><span>AI</span>
+              </div>
+              <div class="ctx-body">
+                <div class="ctx-row">
+                  <div class="ctx-row-head">
+                    <span class="chev">▾</span>本章目标<span class="meta">编辑</span>
+                  </div>
+                  <p class="ctx-summary">让林照发现：信件上的日期，比她收到信的日子晚了一天。</p>
+                </div>
+                <div class="ctx-row">
+                  <div class="ctx-row-head"><span class="chev">▸</span>作者备忘</div>
+                  <p class="ctx-summary">待改：开头两段雨景重复。</p>
+                </div>
+              </div>
+              <div class="ctx-actions">
+                <span class="mini-btn">生成本章</span><span class="mini-btn ghost">加工选段</span>
+              </div>
+            </div>
+            <div class="ctx-note">AI 仍占右栏一个页签；要生成先切页签再操作，浏览路径更长。</div>
+          </label>
+
+          <label class="opt">
+            <input type="radio" name="q5" value="C" />
+            <span class="opt-head"><span class="radio-dot"></span>C · 极简右栏 + 固定操作条</span>
+            <small
+              >右栏只留目标摘要和固定底部操作条；资料/备忘收进「更多」或知识库。浏览最少，但资料可达性下降。</small
+            >
+            <div class="ctx-panel" style="margin-top: 10px">
+              <div class="ctx-head">
+                <span>本章 · 第 2 章 · 1,021 字</span><span class="ctx-close">×</span>
+              </div>
+              <div class="ctx-body">
+                <div class="ctx-row">
+                  <div class="ctx-row-head"><span class="chev">▾</span>本章目标</div>
+                  <p class="ctx-summary">让林照发现：信件上的日期，比她收到信的日子晚了一天。</p>
+                </div>
+                <div class="ctx-row">
+                  <div class="ctx-row-head">
+                    <span class="chev">▸</span>更多<span class="meta">资料/备忘/细纲</span>
+                  </div>
+                </div>
+              </div>
+              <div class="ctx-actions">
+                <span class="mini-btn">生成本章</span><span class="mini-btn ghost">加工选段</span>
+              </div>
+            </div>
+            <div class="ctx-note">主操作固定在右栏底部；资料/备忘需要再点「更多」。</div>
+          </label>
+        </div>
+      </section>
+
+      <p class="foot">
+        配套文档：<code>docs/UI-v2-P0-设计规格.md</code>。选择已于 2026-11-01 记录（Q1 B / Q2 A / Q3
+        B / Q4 B / Q5 A）；本页不提交任何数据；选择保存在本机 localStorage，可随时重置。宽度数字为
+        CSS 估算，验收以真实浏览器为准。
+      </p>
+    </div>
+
+    <div class="summary-bar">
+      <div class="summary-inner">
+        <div class="summary-text" id="summary" aria-live="polite">还没有选择任何一项。</div>
+        <button class="btn" type="button" id="copy">复制选择结果</button>
+        <button class="btn ghost" type="button" id="reset">重置</button>
+      </div>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script>
+      (function () {
+        var KEY = 'wenmo.ui.v2.choices';
+        var LABELS = {
+          q1: { A: '宋体默认（19px）', B: '黑体默认（17px）' },
+          q2: {
+            A: '全局导航常驻 + 章节栏浮层保宽',
+            B: '写作时折叠为 64px 图标轨',
+            C: '写作时隐藏全局导航',
+          },
+          q3: {
+            A: '只读本章信息（零迁移）',
+            B: '只读信息 + 作者备忘',
+            C: '目标 + 节拍 + 备忘',
+          },
+          q4: { A: '本章计划', B: '本章' },
+          q5: {
+            A: '上下文检查器（AI 回编辑器）',
+            B: '右栏标签页（AI 留在右栏）',
+            C: '极简右栏 + 固定操作条',
+          },
+        };
+        var FONT = { A: { size: 19, max: 760 }, B: { size: 17, max: 680 } };
+        var NAV = { A: 224, B: 64, C: 0 };
+        var RAIL = 240;
+        var PAD = 48;
+        var vp = 1280;
+
+        var state = load();
+
+        function load() {
+          try {
+            var raw = localStorage.getItem(KEY);
+            return raw ? JSON.parse(raw) : {};
+          } catch (e) {
+            return {};
+          }
+        }
+        function save() {
+          try {
+            localStorage.setItem(KEY, JSON.stringify(state));
+          } catch (e) {}
+        }
+
+        var radios = document.querySelectorAll('input[type="radio"]');
+        radios.forEach(function (input) {
+          if (state[input.name] === input.value) input.checked = true;
+          input.addEventListener('change', function () {
+            state[input.name] = input.value;
+            save();
+            syncCards();
+            renderSummary();
+            renderNav();
+          });
+        });
+
+        document.querySelectorAll('.vp-tabs button').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            vp = Number(btn.dataset.vp);
+            document.querySelectorAll('.vp-tabs button').forEach(function (b) {
+              b.setAttribute('aria-pressed', String(b === btn));
+            });
+            renderNav();
+          });
+        });
+
+        function segment(width, cls, label) {
+          var span = document.createElement('span');
+          span.className = cls;
+          span.style.flex = '0 0 ' + width + 'px';
+          span.style.minWidth = width > 60 ? '0' : '0';
+          span.textContent = width >= 56 ? label : '';
+          return span;
+        }
+
+        function renderNav() {
+          var font = FONT[state.q1] || FONT.A;
+          ['A', 'B', 'C'].forEach(function (opt) {
+            var bar = document.querySelector('[data-bar="' + opt + '"]');
+            var read = document.querySelector('[data-read="' + opt + '"]');
+            if (!bar || !read) return;
+            bar.innerHTML = '';
+            var nav = NAV[opt];
+            var showRail = vp >= (opt === 'A' ? 1280 : opt === 'B' ? 1200 : 1024);
+            var rail = showRail ? RAIL : 0;
+            var avail = vp - nav - rail - PAD;
+            var body = Math.min(avail, font.max);
+            var pad = PAD + Math.max(0, avail - body);
+            var barW = Math.min(bar.clientWidth || 720, 720);
+            var scale = barW / vp;
+
+            if (nav) bar.appendChild(segment(nav * scale, 'seg-nav', '导航 ' + nav));
+            if (rail) bar.appendChild(segment(rail * scale, 'seg-rail', '章节 ' + rail));
+            bar.appendChild(segment(body * scale, 'seg-editor', '正文 ' + body + 'px'));
+            if (pad > 0) bar.appendChild(segment(pad * scale, 'seg-pad', ''));
+
+            var chars = (body / font.size).toFixed(1);
+            var warn =
+              body >= font.max * 0.99
+                ? '<span>达到 40 字目标</span>'
+                : body >= font.max * 0.95
+                  ? '<span>接近 40 字目标</span>'
+                  : '<span class="warn">低于 40 字目标</span>';
+            var margin = Math.max(0, avail - body);
+            read.innerHTML =
+              '<span>可用 <b>' +
+              Math.round(avail) +
+              'px</b> · 正文 <b>' +
+              Math.round(body) +
+              'px</b> · 约 <b>' +
+              chars +
+              ' 字/行</b>（' +
+              font.size +
+              'px，上限 ' +
+              font.max +
+              'px，余量 ' +
+              Math.round(margin) +
+              'px 留白）</span>' +
+              warn +
+              (showRail ? '' : '<span>章节栏：浮层</span>');
+          });
+          updateSelectedCards();
+        }
+
+        function syncCards() {
+          document.querySelectorAll('.opt').forEach(function (card) {
+            var input = card.querySelector('input[type="radio"]');
+            if (!input) return;
+            card.style.borderColor = input.checked ? '' : '';
+          });
+          updateSelectedCards();
+        }
+
+        function updateSelectedCards() {
+          document.querySelectorAll('.nav-option').forEach(function (card) {
+            var input = card.querySelector('input[type="radio"]');
+            var opt = card.dataset.option;
+            card.classList.toggle('selected', input && input.checked);
+            card.classList.toggle('selected', opt && state.q2 === opt);
+          });
+        }
+
+        function renderSummary() {
+          var answered = ['q1', 'q2', 'q3', 'q4', 'q5'].filter(function (k) {
+            return state[k];
+          });
+          var el = document.getElementById('summary');
+          if (!answered.length) {
+            el.textContent = '还没有选择任何一项。';
+            return;
+          }
+          var parts = answered.map(function (k) {
+            return k.toUpperCase() + '：' + (LABELS[k][state[k]] || state[k]);
+          });
+          el.innerHTML =
+            '已选 <b>' +
+            answered.length +
+            ' / 5</b> · ' +
+            parts
+              .map(function (p) {
+                return p;
+              })
+              .join(' · ');
+        }
+
+        function toast(msg) {
+          var t = document.getElementById('toast');
+          t.textContent = msg;
+          t.classList.add('show');
+          setTimeout(function () {
+            t.classList.remove('show');
+          }, 1600);
+        }
+
+        document.getElementById('copy').addEventListener('click', function () {
+          var lines = [
+            '文墨 UI v2 · 选择记录（2026-11-01）',
+            'Q1 正文字体：' + (state.q1 ? state.q1 + ' · ' + LABELS.q1[state.q1] : '未选'),
+            'Q2 导航密度：' + (state.q2 ? state.q2 + ' · ' + LABELS.q2[state.q2] : '未选'),
+            'Q3 章内任务：' + (state.q3 ? state.q3 + ' · ' + LABELS.q3[state.q3] : '未选'),
+            'Q4 右栏命名：' + (state.q4 ? state.q4 + ' · ' + LABELS.q4[state.q4] : '未选'),
+            'Q5 右栏组织：' + (state.q5 ? state.q5 + ' · ' + LABELS.q5[state.q5] : '未选'),
+          ];
+          var text = lines.join('\n');
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(
+              function () {
+                toast('已复制选择结果');
+              },
+              function () {
+                fallbackCopy(text);
+              },
+            );
+          } else {
+            fallbackCopy(text);
+          }
+        });
+
+        function fallbackCopy(text) {
+          var ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          try {
+            document.execCommand('copy');
+            toast('已复制选择结果');
+          } catch (e) {
+            toast('复制失败，请手动选择下方文本');
+            console.log(text);
+          }
+          document.body.removeChild(ta);
+        }
+
+        document.getElementById('reset').addEventListener('click', function () {
+          state = {};
+          try {
+            localStorage.removeItem(KEY);
+          } catch (e) {}
+          document.querySelectorAll('input[type="radio"]').forEach(function (input) {
+            input.checked = false;
+          });
+          syncCards();
+          renderSummary();
+          renderNav();
+          toast('已重置');
+        });
+
+        renderSummary();
+        renderNav();
+        window.addEventListener('resize', renderNav);
+      })();
+    </script>
+  </body>
+</html>

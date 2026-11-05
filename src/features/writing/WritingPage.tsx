@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { RequireNovel } from '@/app/RequireNovel';
+import type { ContextRequest } from '@/context/ContextBuilder';
 import { useRepository } from '@/data/RepositoryProvider';
 import { useInvalidate, useRepoQuery } from '@/data/useRepoQuery';
 import type { Chapter, ChapterSummary, Novel, OutlineNode, SideStory } from '@/domain/schema';
@@ -22,6 +23,19 @@ import { ScenarioEntryCard } from '../scenario/ScenarioEntryCard';
 import { ChapterEditorScreen } from './ChapterEditorScreen';
 import { ChapterListItem } from './ChapterListItem';
 import { SideStorySheet } from './SideStorySheet';
+
+/**
+ * 阶段 2 的开发内联预览：只在 DEV / 测试环境存在，按需懒加载。
+ * 生产构建里这个三元分支会被摇掉，不会把预览壳带进 bundle。
+ */
+const InlineWorkbenchPreview =
+  import.meta.env.DEV || import.meta.env.MODE === 'test'
+    ? lazy(() =>
+        import('./workbench/InlineWorkbenchPreview').then((module) => ({
+          default: module.InlineWorkbenchPreview,
+        })),
+      )
+    : null;
 
 /**
  * 大纲区块三个规划入口的关系：给作者一句「什么时候用哪个」。
@@ -104,6 +118,13 @@ function WritingContent({ novel }: { novel: Novel }) {
    */
   const location = useLocation();
   const navigate = useNavigate();
+  /**
+   * 阶段 2 的内联编辑器验证：只在开发/测试环境且显式带 `?inline-editor=1` 时启用。
+   * 生产构建不会进入这个分支；默认 `/write` 仍是原来的页面 + 全屏编辑器。
+   */
+  const inlineEditorPreview =
+    (import.meta.env.DEV || import.meta.env.MODE === 'test') &&
+    new URLSearchParams(location.search).has('inline-editor');
   const wantedChapterId =
     (location.state as { openChapterId?: string } | null)?.openChapterId ?? null;
 
@@ -225,6 +246,24 @@ function WritingContent({ novel }: { novel: Novel }) {
       ? sideStories.find((story) => story.id === sideSheet)
       : undefined;
 
+  const editorContext: Omit<
+    ContextRequest,
+    'selectedEntryIds' | 'recentSummaryCount' | 'targetChapterId' | 'excludedNormIds'
+  > | null = data?.style
+    ? {
+        novel,
+        style: data.style,
+        categories: data.categories,
+        entries: data.entries,
+        outline,
+        chapters,
+        summaries: data.summaries,
+        sideStories,
+        writingNorms: data.writingNorms,
+        targetNodeId: editingChapter?.outlineNodeId ?? null,
+      }
+    : null;
+
   const sideSection = (
     <Section
       title="外传"
@@ -283,6 +322,60 @@ function WritingContent({ novel }: { novel: Novel }) {
       )}
     </Section>
   );
+
+  if (inlineEditorPreview && editingChapter && editorContext && !editorOrphaned) {
+    const toRailChapter = (chapter: Chapter) => ({
+      id: chapter.id,
+      // 标题里已经有章号的作品不再重复拼「第 N 章」；分组标题负责外传/主线语境
+      title: chapter.title || `第 ${chapter.index} 章`,
+      meta: `${chapter.status === 'done' ? '已完成' : '草稿'} · ${formatWordCount(chapter.wordCount)}`,
+      current: chapter.id === editingChapter.id,
+    });
+    const inlineGroups = [
+      {
+        key: 'main',
+        title: '主线',
+        chapters: chaptersOfTrack(chapters, null).map(toRailChapter),
+      },
+      ...sideStories.map((story) => ({
+        key: story.id,
+        title: sideStoryLabel(story),
+        chapters: chaptersOfTrack(chapters, story.id).map(toRailChapter),
+      })),
+    ].filter((group) => group.chapters.length > 0);
+
+    return (
+      <Suspense
+        fallback={
+          <div className="py-16 text-center text-sm text-ink-300" role="status">
+            加载工作台…
+          </div>
+        }
+      >
+        {InlineWorkbenchPreview ? (
+          <InlineWorkbenchPreview
+            workTitle={novel.title}
+            railTitle="章节"
+            groups={inlineGroups}
+            railFooter={
+              <p>
+                {mainChapters.length} 章 · {formatWordCount(writtenWords)}
+                <br />
+                开发预览 · inline-editor
+              </p>
+            }
+            editor={{
+              chapter: editingChapter,
+              ...(editingSideStory ? { sideStory: editingSideStory } : {}),
+              context: editorContext,
+              onClose: () => setEditingChapterId(null),
+            }}
+            onSwitchChapter={setEditingChapterId}
+          />
+        ) : null}
+      </Suspense>
+    );
+  }
 
   return (
     <Page
@@ -474,24 +567,13 @@ function WritingContent({ novel }: { novel: Novel }) {
         />
       ) : null}
 
-      {editingChapter && data?.style && !editorOrphaned ? (
+      {editingChapter && data?.style && editorContext && !editorOrphaned ? (
         <ChapterEditorScreen
           // 换章节时重新挂载，编辑器内部的草稿状态随之重置
           key={editingChapter.id}
           chapter={editingChapter}
           {...(editingSideStory ? { sideStory: editingSideStory } : {})}
-          context={{
-            novel,
-            style: data.style,
-            categories: data.categories,
-            entries: data.entries,
-            outline,
-            chapters,
-            summaries: data.summaries,
-            sideStories,
-            writingNorms: data.writingNorms,
-            targetNodeId: editingChapter.outlineNodeId,
-          }}
+          context={editorContext}
           onClose={() => setEditingChapterId(null)}
         />
       ) : null}

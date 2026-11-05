@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>UI v2 阶段 1 · 空壳布局验收夹具</title>
+    <style>
+      /*
+       * 这是 scripts/ui-width-check.mjs 的测量夹具，不是产品页面。
+       * 结构与目标尺寸对齐《UI-v2-P0-设计规格》§3：
+       *   全局导航 224 / 章节栏 240 / 编辑器内边距 24 / 正文 17px/1.85 / 正文上限 680（40×17）
+       * 只用于验证测量口径与断言；阶段 1 接入真实写作页后，用 --url 指向 /__workbench 即可复用脚本。
+       */
+      :root {
+        --nav: 224px;
+        --rail: 240px;
+        --pad: 24px;
+        --prose-size: 17px;
+        --prose-line: 1.85;
+        --prose-max: 680px;
+        --paper: #fdfcfa;
+        --raised: #ffffff;
+        --sunken: #f4f2ee;
+        --ink: #14181f;
+        --ink-700: #333a45;
+        --ink-500: #5c6675;
+        --ink-300: #98a1ae;
+        --line: #dfe2e7;
+        --seal: #d9561f;
+        --font-hei:
+          -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+          'Noto Sans SC', sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--paper);
+        font-family: var(--font-hei);
+      }
+      button {
+        font: inherit;
+        color: inherit;
+        cursor: pointer;
+      }
+      .workbench {
+        display: flex;
+        height: 100dvh;
+        min-height: 100vh;
+        overflow: hidden;
+      }
+      .global-nav {
+        flex: 0 0 var(--nav);
+        width: var(--nav);
+        border-right: 1px solid var(--line);
+        background: var(--paper);
+        padding: 16px 12px;
+      }
+      .brand {
+        font-weight: 600;
+        font-size: 16px;
+        padding: 4px 8px 16px;
+      }
+      .global-nav ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 2px;
+      }
+      .global-nav li {
+        padding: 9px 10px;
+        border-radius: 10px;
+        color: var(--ink-500);
+        font-size: 13px;
+      }
+      .global-nav li[aria-current='page'] {
+        background: var(--sunken);
+        color: var(--ink);
+      }
+      .workbench-main {
+        flex: 1;
+        min-width: 0;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        grid-template-columns: var(--rail) minmax(0, 1fr);
+        height: 100dvh;
+      }
+      .workbench-header {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 52px;
+        padding: 10px 18px;
+        border-bottom: 1px solid var(--line);
+        background: var(--paper);
+      }
+      .workbench-header strong {
+        font-size: 14px;
+      }
+      .workbench-header .muted {
+        color: var(--ink-500);
+        font-size: 12px;
+      }
+      .rail-toggle {
+        display: none;
+        border: 1px solid var(--line);
+        background: var(--raised);
+        border-radius: 8px;
+        padding: 5px 10px;
+        font-size: 12px;
+      }
+      .chapter-rail {
+        grid-row: 2;
+        overflow-y: auto;
+        border-right: 1px solid var(--line);
+        background: var(--paper);
+        padding: 14px 12px;
+      }
+      .chapter-rail h2 {
+        margin: 0 8px 10px;
+        font-size: 11px;
+        color: var(--ink-500);
+        font-weight: 500;
+      }
+      .chapter-rail ol {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 3px;
+      }
+      .chapter-rail li {
+        padding: 9px 10px;
+        border-radius: 8px;
+        font-size: 12px;
+        color: var(--ink-700);
+      }
+      .chapter-rail li[aria-current='page'] {
+        background: var(--sunken);
+        color: var(--ink);
+        font-weight: 600;
+      }
+      .chapter-rail li small {
+        display: block;
+        margin-top: 3px;
+        color: var(--ink-500);
+        font-weight: 400;
+        font-size: 11px;
+      }
+      .editor-pane {
+        grid-row: 2;
+        min-width: 0;
+        overflow-y: auto;
+        padding: var(--pad);
+        background: var(--raised);
+      }
+      .editor-meta {
+        max-width: var(--prose-max);
+        margin: 0 auto 12px;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        color: var(--ink-500);
+        font-size: 11px;
+      }
+      .editor-title {
+        max-width: var(--prose-max);
+        margin: 0 auto 14px;
+        font-size: 24px;
+        line-height: 1.4;
+      }
+      .prose {
+        width: 100%;
+        max-width: var(--prose-max);
+        margin: 0 auto;
+        font-family: var(--font-hei);
+        font-size: var(--prose-size);
+        line-height: var(--prose-line);
+        color: var(--ink);
+        white-space: pre-wrap;
+        margin-bottom: 40px;
+      }
+      .editor-actions {
+        max-width: var(--prose-max);
+        margin: 0 auto;
+        display: flex;
+        gap: 8px;
+        padding-top: 14px;
+        border-top: 1px solid var(--line);
+      }
+      .editor-actions button {
+        border: 1px solid var(--line);
+        background: var(--paper);
+        border-radius: 8px;
+        padding: 8px 14px;
+        font-size: 13px;
+      }
+      .editor-actions button.primary {
+        background: var(--ink);
+        color: var(--paper);
+        border-color: var(--ink);
+      }
+      /* 1024–1279：章节栏改为浮层，正文优先 */
+      @media (min-width: 1024px) and (max-width: 1279px) {
+        .workbench-main {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .rail-toggle {
+          display: inline-flex;
+        }
+        .chapter-rail {
+          position: fixed;
+          left: var(--nav);
+          top: 0;
+          bottom: 0;
+          width: var(--rail);
+          z-index: 20;
+          visibility: hidden;
+          transform: translateX(-8px);
+          box-shadow: 0 0 0 1px var(--line);
+        }
+        .workbench[data-rail-open='true'] .chapter-rail {
+          visibility: visible;
+          transform: none;
+        }
+      }
+
+      /* <1024：单栏 + 底部主导航（同一个 nav，靠断点换形态），章节栏从左侧浮出 */
+      @media (max-width: 1023px) {
+        .global-nav {
+          position: fixed;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          width: auto;
+          border-right: 0;
+          border-top: 1px solid var(--line);
+          z-index: 30;
+          padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+          background: var(--paper);
+        }
+        .global-nav .brand {
+          display: none;
+        }
+        .global-nav ul {
+          display: flex;
+          justify-content: space-around;
+          gap: 4px;
+        }
+        .global-nav li {
+          flex: 1;
+          text-align: center;
+          padding: 6px 4px;
+          font-size: 11px;
+        }
+        .workbench {
+          display: block;
+        }
+        .workbench-main {
+          display: block;
+          height: 100dvh;
+        }
+        .rail-toggle {
+          display: inline-flex;
+        }
+        .chapter-rail {
+          position: fixed;
+          left: 0;
+          top: 0;
+          bottom: 0;
+          width: 280px;
+          z-index: 20;
+          visibility: hidden;
+          transform: translateX(-8px);
+          box-shadow: 0 0 0 1px var(--line);
+        }
+        .workbench[data-rail-open='true'] .chapter-rail {
+          visibility: visible;
+          transform: none;
+        }
+        .editor-pane {
+          height: 100%;
+          padding-bottom: 84px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="workbench" data-testid="workbench-root">
+      <nav class="global-nav" aria-label="主导航" data-testid="global-nav">
+        <div class="brand">文墨</div>
+        <ul>
+          <li>书架</li>
+          <li>知识库</li>
+          <li aria-current="page">写作</li>
+          <li>计划</li>
+          <li>设置</li>
+        </ul>
+      </nav>
+
+      <div class="workbench-main">
+        <header class="workbench-header" data-testid="workbench-header">
+          <strong>写作</strong>
+          <span class="muted">雾港来信</span>
+          <span class="muted">· 第 2 章 旧城来信</span>
+          <button class="rail-toggle" type="button" data-testid="rail-toggle" aria-expanded="false">
+            章节
+          </button>
+        </header>
+
+        <aside class="chapter-rail" aria-label="章节" data-testid="chapter-rail">
+          <h2>第一卷 · 潮汐</h2>
+          <ol>
+            <li>01 雨停之前<small>已定稿 · 63 字</small></li>
+            <li aria-current="page">02 旧城来信<small>初稿 · 81 字</small></li>
+            <li>03 无声的渡口<small>待写 · 0 字</small></li>
+          </ol>
+        </aside>
+
+        <main class="editor-pane" data-testid="editor-pane">
+          <div class="editor-meta"><span>第 2 章</span><span>初稿 · 81 字</span></div>
+          <h1 class="editor-title">旧城来信</h1>
+          <p class="prose" data-testid="editor-prose">
+            旧城的雨，总比别处下得慢。林照沿着石阶往上走，鞋底带起细碎的水声。街角那家书店还亮着灯，灯光落在潮湿的地面上，像一页没有写完的信。她停在门前，想起那个人说过的话：有些故事，只有回到开始的地方，才知道该怎样继续。门内传来翻书的声音，她抬起手，却没有立刻推门。
+          </p>
+          <div class="editor-actions">
+            <button type="button">加工这一段</button>
+            <button type="button" class="primary">生成本章</button>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        var root = document.querySelector('[data-testid="workbench-root"]');
+        var toggle = document.querySelector('[data-testid="rail-toggle"]');
+        toggle.addEventListener('click', function () {
+          var open = root.dataset.railOpen !== 'true';
+          root.dataset.railOpen = String(open);
+          toggle.setAttribute('aria-expanded', String(open));
+        });
+      })();
+    </script>
+  </body>
+</html>
