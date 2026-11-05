@@ -162,14 +162,14 @@ describe('解析备份文件', () => {
     expect(parseBackup(minimal).data.novels).toEqual([]);
   });
 
-  it('当前文件版本为 4（加入互动推演）', () => {
-    expect(BACKUP_VERSION).toBe(4);
+  it('当前文件版本为 5（加入章节作者备忘）', () => {
+    expect(BACKUP_VERSION).toBe(5);
   });
 
-  it('版本 5 且正文里有不认识的枚举值时，报的仍是「来自更新版本」', () => {
+  it('版本高于当前且正文里有不认识的枚举值时，报的仍是「来自更新版本」', () => {
     const future = JSON.stringify({
       app: 'myliterature',
-      version: 5,
+      version: BACKUP_VERSION + 1,
       exportedAt: 0,
       data: {
         novels: [{ id: 'n1', title: '书', createdAt: 0, updatedAt: 0, status: 'archived' }],
@@ -340,11 +340,11 @@ describe('写作规范与旧版本备份', () => {
     });
   }
 
-  it('新备份的版本为 4 且带上写作规范', async () => {
+  it('新备份的版本为 5 且带上写作规范', async () => {
     const { norm } = await seedNovel();
     const { file, text } = await exportBackup(repo);
 
-    expect(file.version).toBe(4);
+    expect(file.version).toBe(5);
     expect(file.data.writingNorms).toEqual([norm]);
     expect(parseBackup(text).data.writingNorms).toEqual([norm]);
   });

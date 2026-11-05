@@ -330,6 +330,7 @@ function sideChapter(
     index,
     title: id,
     content: '',
+    note: '',
     sourceContent: '',
     sourceLanguage: '',
     wordCount: 0,

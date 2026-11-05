@@ -197,6 +197,21 @@ export class AppDatabase extends Dexie {
             norm.scopes = addInteractiveScopeIfFull(norm.scopes ?? ALL_NORM_SCOPES_V6);
           });
       });
+
+    /**
+     * v8：章节作者备忘。
+     *
+     * 读取路径不做 Zod parse，所以旧行要在 upgrade 里补空串；
+     * 新库写入时由 ChapterSchema 的 default 保证字段存在。
+     */
+    this.version(8).upgrade(async (tx) => {
+      await tx
+        .table('chapters')
+        .toCollection()
+        .modify((chapter: Partial<Chapter>) => {
+          chapter.note ??= '';
+        });
+    });
   }
 }
 

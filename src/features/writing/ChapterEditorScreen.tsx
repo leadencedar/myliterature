@@ -145,6 +145,8 @@ export interface ChapterEditorHandle {
   hasPendingChanges: () => boolean;
   /** 明确放弃待保存内容（守卫里选择「放弃修改并离开」时用） */
   discard: () => void;
+  /** 作者备忘：并入编辑器串行保存队列，保存失败时与正文一样可重试 */
+  saveNote: (note: string) => Promise<boolean>;
 }
 
 /**
@@ -401,6 +403,10 @@ export function ChapterEditorScreen({
           timerRef.current = null;
         }
         pendingRef.current = null;
+      },
+      saveNote: (note) => {
+        scheduleSave({ note });
+        return flush.current();
       },
     }),
     [],

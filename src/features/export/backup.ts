@@ -31,9 +31,11 @@ export const BACKUP_APP_ID = 'myliterature';
  * 大纲 / 章节 / 外传的推演溯源（`scenarioSource`）、写作规范的 `interactive` 作用范围。必须升版本：
  * 旧版应用的 `z.object` 会悄悄丢掉推演数据，而 `interactive` 作用范围会让旧应用整份拒绝、
  * 却报成「内容不符合预期」。升版本后旧应用明确报「来自更新版本」。
- * v1–v3 文件照常能读：推演为空、条目通用、溯源为 null；五项全开的规范补上「互动推演」（与 v7 迁移同一条规则）。
+ * v5：加入章节作者备忘（`Chapter.note`）。必须升版本：旧版应用的 `z.object` 会在恢复时
+ * 悄悄丢掉 memo；升版本后旧应用明确报「来自更新版本」。
+ * v1–v4 文件照常能读：`note` 默认为空串。
  */
-export const BACKUP_VERSION = 4;
+export const BACKUP_VERSION = 5;
 
 const BACKUP_APP_LITERAL = z.literal(BACKUP_APP_ID, '这不是本应用的备份文件');
 /** 文件格式版本，与 IndexedDB 的架构版本无关 */

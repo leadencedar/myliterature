@@ -8,7 +8,7 @@ import type { Chapter, ChapterSummary, Novel, OutlineNode, SideStory } from '@/d
 import { chaptersOfTrack, sideStoryLabel } from '@/domain/sideStory';
 import { Button, IconButton } from '@/ui/Button';
 import { EmptyState, Page, Section } from '@/ui/Page';
-import { useAnyModalOpen } from '@/ui/Sheet';
+import { Sheet, useAnyModalOpen } from '@/ui/Sheet';
 import { MoreIcon, PlusIcon } from '@/ui/icons';
 import { formatWordCount } from '@/ui/format';
 import { planOutlineBackfill } from '../outline/backfillOutline';
@@ -20,22 +20,19 @@ import { ExportSheet } from '../export/ExportSheet';
 import { outlineStats } from '../outline/outlineTree';
 import { ProposalInbox } from '../proposals/ProposalInbox';
 import { ScenarioEntryCard } from '../scenario/ScenarioEntryCard';
-import { ChapterEditorScreen } from './ChapterEditorScreen';
+import { ChapterEditorScreen, type ChapterEditorHandle } from './ChapterEditorScreen';
 import { ChapterListItem } from './ChapterListItem';
 import { SideStorySheet } from './SideStorySheet';
 
 /**
- * 阶段 2 的开发内联预览：只在 DEV / 测试环境存在，按需懒加载。
- * 生产构建里这个三元分支会被摇掉，不会把预览壳带进 bundle。
+ * 写作工作台按需加载：只有打开章节时才需要章节栏 / 右栏 / 内联编辑器代码，
+ * 首屏写作页（大纲、外传、提案入口）不必背上这份重量。
  */
-const InlineWorkbenchPreview =
-  import.meta.env.DEV || import.meta.env.MODE === 'test'
-    ? lazy(() =>
-        import('./workbench/InlineWorkbenchPreview').then((module) => ({
-          default: module.InlineWorkbenchPreview,
-        })),
-      )
-    : null;
+const WritingWorkbench = lazy(() =>
+  import('./workbench/WritingWorkbench').then((module) => ({
+    default: module.WritingWorkbench,
+  })),
+);
 
 /**
  * 大纲区块三个规划入口的关系：给作者一句「什么时候用哪个」。
@@ -118,13 +115,7 @@ function WritingContent({ novel }: { novel: Novel }) {
    */
   const location = useLocation();
   const navigate = useNavigate();
-  /**
-   * 阶段 2 的内联编辑器验证：只在开发/测试环境且显式带 `?inline-editor=1` 时启用。
-   * 生产构建不会进入这个分支；默认 `/write` 仍是原来的页面 + 全屏编辑器。
-   */
-  const inlineEditorPreview =
-    (import.meta.env.DEV || import.meta.env.MODE === 'test') &&
-    new URLSearchParams(location.search).has('inline-editor');
+  /** 从译名表等处带过来的「直接打开某章」意图，只消费一次 */
   const wantedChapterId =
     (location.state as { openChapterId?: string } | null)?.openChapterId ?? null;
 
@@ -137,6 +128,11 @@ function WritingContent({ novel }: { novel: Novel }) {
   const [continueOpen, setContinueOpen] = useState(false);
   /** 外传抽屉：null 关闭；'new' 新建；否则为要编辑的外传 id */
   const [sideSheet, setSideSheet] = useState<'new' | string | null>(null);
+  /** 工作台页头的推演 / 待确认面板 */
+  const [scenarioOpen, setScenarioOpen] = useState(false);
+  const [proposalOpen, setProposalOpen] = useState(false);
+  /** 内联编辑器的命令面：新建章节前先 flush */
+  const [workbenchEditor, setWorkbenchEditor] = useState<ChapterEditorHandle | null>(null);
   const modalOpen = useAnyModalOpen();
 
   /**
@@ -199,6 +195,9 @@ function WritingContent({ novel }: { novel: Novel }) {
 
   /** 从大纲节点进入写作：已有对应章节就打开它，否则新建一章并挂上关联 */
   async function openChapterForNode(node: OutlineNode) {
+    // 工作台里从大纲/外传切章也必须先 flush 当前正文
+    const canLeave = await workbenchEditor?.flush();
+    if (canLeave === false) return;
     const existing = chapters.find((chapter) => chapter.outlineNodeId === node.id);
     if (existing) {
       setSelected(null);
@@ -221,10 +220,21 @@ function WritingContent({ novel }: { novel: Novel }) {
 
   /** 外传卡片的「写新一章」：在这部外传里续一章并打开编辑器 */
   async function writeSideChapter(story: SideStory) {
+    const canLeave = await workbenchEditor?.flush();
+    if (canLeave === false) return;
     const created = await repository.createChapter(novel.id, {
       sideStoryId: story.id,
       source: 'manual',
     });
+    invalidate();
+    setEditingChapterId(created.id);
+  }
+
+  /** 左栏「新建章节」：主线空章；先 flush 当前编辑器，再切过去 */
+  async function createBlankChapter() {
+    const canLeave = await workbenchEditor?.flush();
+    if (canLeave === false) return;
+    const created = await repository.createChapter(novel.id, {});
     invalidate();
     setEditingChapterId(created.id);
   }
@@ -246,6 +256,18 @@ function WritingContent({ novel }: { novel: Novel }) {
       ? sideStories.find((story) => story.id === sideSheet)
       : undefined;
 
+  /** 右栏「本章」的保存动作；失败交给面板显示，不弹全屏错误 */
+  async function saveInlineGoal(next: string) {
+    if (!editingChapter?.outlineNodeId) return false;
+    try {
+      await repository.updateOutlineNode(editingChapter.outlineNodeId, { synopsis: next });
+      invalidate();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   const editorContext: Omit<
     ContextRequest,
     'selectedEntryIds' | 'recentSummaryCount' | 'targetChapterId' | 'excludedNormIds'
@@ -263,6 +285,76 @@ function WritingContent({ novel }: { novel: Novel }) {
         targetNodeId: editingChapter?.outlineNodeId ?? null,
       }
     : null;
+
+  const workbenchHeaderActions = (
+    <>
+      <button type="button" className="wb-shell-action" onClick={() => setScenarioOpen(true)}>
+        推演
+      </button>
+      {data && data.pending.length > 0 ? (
+        <button type="button" className="wb-shell-action" onClick={() => setProposalOpen(true)}>
+          待确认 {data.pending.length}
+        </button>
+      ) : null}
+      {chapters.length > 0 ? (
+        <button type="button" className="wb-shell-action" onClick={() => setExportOpen(true)}>
+          导出
+        </button>
+      ) : null}
+    </>
+  );
+
+  const workbenchOutlineView = (
+    <div className="flex flex-col gap-2">
+      <button type="button" className="wb-shell-action" onClick={addRootNode}>
+        ＋ 新建大纲节点
+      </button>
+      {outline.length > 0 ? (
+        <OutlineTreeView
+          nodes={outline}
+          chapterCountByNode={chapterCountByNode}
+          onSelect={(node, depth) => setSelected({ node, depth })}
+        />
+      ) : (
+        <p className="px-2 text-[0.6875rem] leading-relaxed text-ink-500">
+          还没有大纲。可以先手动加节点，或按已有章节生成大纲。
+        </p>
+      )}
+      {showBackfillEntry ? (
+        <button type="button" className="wb-shell-action" onClick={() => setBackfillOpen(true)}>
+          按已有章节生成大纲
+        </button>
+      ) : null}
+    </div>
+  );
+
+  const workbenchRailActions = (
+    <>
+      <button type="button" onClick={() => void createBlankChapter()}>
+        ＋ 新建章节
+      </button>
+      <button type="button" onClick={() => setSideSheet('new')}>
+        ＋ 新建外传
+      </button>
+      {showContinueEntry ? (
+        <button type="button" onClick={() => setContinueOpen(true)}>
+          规划后续 3–5 章
+        </button>
+      ) : null}
+    </>
+  );
+
+  const workbenchRailFooter = (
+    <div>
+      <p>
+        {formatWordCount(writtenWords)} 已写
+        {stats.targetWords > 0 ? ` / ${formatWordCount(stats.targetWords)} 目标` : ''}
+      </p>
+      <p>
+        {mainChapters.length} 章 · 大纲 {stats.done}/{stats.total}
+      </p>
+    </div>
+  );
 
   const sideSection = (
     <Section
@@ -323,7 +415,91 @@ function WritingContent({ novel }: { novel: Novel }) {
     </Section>
   );
 
-  if (inlineEditorPreview && editingChapter && editorContext && !editorOrphaned) {
+  /**
+   * 两个返回分支共用的弹层：大纲回溯、前沿续写、导出、外传、节点编辑、
+   * 工作台页头的推演/待确认面板。放在分支外，打开工作台时这些能力同样可用。
+   */
+  const sharedSheets = (
+    <>
+      <OutlineBackfillSheet
+        open={backfillOpen}
+        novelId={novel.id}
+        plan={backfillPlan}
+        chapters={chapters}
+        onClose={() => setBackfillOpen(false)}
+      />
+
+      {data?.style ? (
+        <OutlineContinueSheet
+          open={continueOpen}
+          novel={novel}
+          style={data.style}
+          outline={outline}
+          chapters={chapters}
+          summaries={data.summaries}
+          entries={data.entries}
+          categories={data.categories}
+          {...(data.writingNorms ? { writingNorms: data.writingNorms } : {})}
+          onClose={() => setContinueOpen(false)}
+        />
+      ) : null}
+
+      <ExportSheet
+        open={exportOpen}
+        novel={novel}
+        chapters={chapters}
+        sideStories={sideStories}
+        onClose={() => setExportOpen(false)}
+      />
+
+      <SideStorySheet
+        open={sideSheet !== null && (sideSheet === 'new' || sheetStory !== undefined)}
+        novelId={novel.id}
+        sideStory={sheetStory}
+        chapters={chapters}
+        onClose={() => setSideSheet(null)}
+      />
+
+      {selectedNode && data?.style ? (
+        <OutlineNodeSheet
+          open
+          novel={novel}
+          style={data.style}
+          node={selectedNode}
+          nodes={outline}
+          entries={data.entries}
+          categories={data.categories}
+          depth={selected?.depth ?? 0}
+          chapters={chapters}
+          openThreads={latestMainlineOpenThreads(chapters, data.summaries)}
+          rollingSummary={novel.rollingSummary}
+          onWrite={openChapterForNode}
+          onClose={() => setSelected(null)}
+        />
+      ) : null}
+
+      <Sheet
+        open={scenarioOpen}
+        title="互动推演"
+        description="推开一局，或继续最近的推演；推演页路由不变。"
+        onClose={() => setScenarioOpen(false)}
+        size="dialog"
+      >
+        <ScenarioEntryCard novel={novel} />
+      </Sheet>
+
+      <Sheet
+        open={proposalOpen}
+        title="待确认提案"
+        description="确认后才会写入大纲与知识库。"
+        onClose={() => setProposalOpen(false)}
+      >
+        <ProposalInbox novelId={novel.id} onSettled={() => setProposalOpen(false)} />
+      </Sheet>
+    </>
+  );
+
+  if (editingChapter && editorContext && !editorOrphaned) {
     const toRailChapter = (chapter: Chapter) => ({
       id: chapter.id,
       // 标题里已经有章号的作品不再重复拼「第 N 章」；分组标题负责外传/主线语境
@@ -331,17 +507,32 @@ function WritingContent({ novel }: { novel: Novel }) {
       meta: `${chapter.status === 'done' ? '已完成' : '草稿'} · ${formatWordCount(chapter.wordCount)}`,
       current: chapter.id === editingChapter.id,
     });
+    const inlineOutlineNode = editingChapter.outlineNodeId
+      ? outline.find((node) => node.id === editingChapter.outlineNodeId)
+      : undefined;
+    const inlineLinkedEntries = inlineOutlineNode
+      ? (data?.entries ?? []).filter((entry) => inlineOutlineNode.linkedEntryIds.includes(entry.id))
+      : [];
     const inlineGroups = [
       {
         key: 'main',
         title: '主线',
         chapters: chaptersOfTrack(chapters, null).map(toRailChapter),
       },
-      ...sideStories.map((story) => ({
-        key: story.id,
-        title: sideStoryLabel(story),
-        chapters: chaptersOfTrack(chapters, story.id).map(toRailChapter),
-      })),
+      ...sideStories.map((story) => {
+        const storyChapters = chaptersOfTrack(chapters, story.id);
+        return {
+          key: story.id,
+          title: `${sideStoryLabel(story)} · ${formatWordCount(
+            storyChapters.reduce((sum, chapter) => sum + chapter.wordCount, 0),
+          )}`,
+          chapters: storyChapters.map(toRailChapter),
+          actions: [
+            { label: '写新章', onClick: () => void writeSideChapter(story) },
+            { label: '编辑', onClick: () => setSideSheet(story.id) },
+          ],
+        };
+      }),
     ].filter((group) => group.chapters.length > 0);
 
     return (
@@ -352,27 +543,34 @@ function WritingContent({ novel }: { novel: Novel }) {
           </div>
         }
       >
-        {InlineWorkbenchPreview ? (
-          <InlineWorkbenchPreview
-            workTitle={novel.title}
-            railTitle="章节"
-            groups={inlineGroups}
-            railFooter={
-              <p>
-                {mainChapters.length} 章 · {formatWordCount(writtenWords)}
-                <br />
-                开发预览 · inline-editor
-              </p>
-            }
-            editor={{
-              chapter: editingChapter,
-              ...(editingSideStory ? { sideStory: editingSideStory } : {}),
-              context: editorContext,
-              onClose: () => setEditingChapterId(null),
-            }}
-            onSwitchChapter={setEditingChapterId}
-          />
-        ) : null}
+        <WritingWorkbench
+          workTitle={novel.title}
+          railTitle="目录"
+          groups={inlineGroups}
+          railFooter={workbenchRailFooter}
+          headerActions={workbenchHeaderActions}
+          railTabs={[
+            { key: 'chapters', label: '章节' },
+            { key: 'outline', label: '大纲' },
+          ]}
+          outlineView={workbenchOutlineView}
+          railActions={workbenchRailActions}
+          onEditorHandle={setWorkbenchEditor}
+          editor={{
+            chapter: editingChapter,
+            ...(editingSideStory ? { sideStory: editingSideStory } : {}),
+            context: editorContext,
+            onClose: () => setEditingChapterId(null),
+          }}
+          onSwitchChapter={setEditingChapterId}
+          panel={{
+            ...(inlineOutlineNode ? { outlineNode: inlineOutlineNode } : {}),
+            linkedEntries: inlineLinkedEntries,
+            sideBrief: editingChapter.scenarioSource?.brief ?? '',
+            onSaveGoal: saveInlineGoal,
+          }}
+        />
+        {sharedSheets}
       </Suspense>
     );
   }
@@ -510,62 +708,7 @@ function WritingContent({ novel }: { novel: Novel }) {
         </>
       )}
 
-      <OutlineBackfillSheet
-        open={backfillOpen}
-        novelId={novel.id}
-        plan={backfillPlan}
-        chapters={chapters}
-        onClose={() => setBackfillOpen(false)}
-      />
-
-      {data?.style ? (
-        <OutlineContinueSheet
-          open={continueOpen}
-          novel={novel}
-          style={data.style}
-          outline={outline}
-          chapters={chapters}
-          summaries={data.summaries}
-          entries={data.entries}
-          categories={data.categories}
-          {...(data.writingNorms ? { writingNorms: data.writingNorms } : {})}
-          onClose={() => setContinueOpen(false)}
-        />
-      ) : null}
-
-      <ExportSheet
-        open={exportOpen}
-        novel={novel}
-        chapters={chapters}
-        sideStories={sideStories}
-        onClose={() => setExportOpen(false)}
-      />
-
-      <SideStorySheet
-        open={sideSheet !== null && (sideSheet === 'new' || sheetStory !== undefined)}
-        novelId={novel.id}
-        sideStory={sheetStory}
-        chapters={chapters}
-        onClose={() => setSideSheet(null)}
-      />
-
-      {selectedNode && data?.style ? (
-        <OutlineNodeSheet
-          open
-          novel={novel}
-          style={data.style}
-          node={selectedNode}
-          nodes={outline}
-          entries={data.entries}
-          categories={data.categories}
-          depth={selected?.depth ?? 0}
-          chapters={chapters}
-          openThreads={latestMainlineOpenThreads(chapters, data.summaries)}
-          rollingSummary={novel.rollingSummary}
-          onWrite={openChapterForNode}
-          onClose={() => setSelected(null)}
-        />
-      ) : null}
+      {sharedSheets}
 
       {editingChapter && data?.style && editorContext && !editorOrphaned ? (
         <ChapterEditorScreen
