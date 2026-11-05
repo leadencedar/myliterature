@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useAppearanceSettings, lineHeightFor } from '@/features/settings/appearanceSettings';
 import './workbench.css';
 
 export interface WorkbenchChapter {
@@ -6,6 +7,8 @@ export interface WorkbenchChapter {
   title: string;
   meta: string;
   current?: boolean;
+  /** 章号：搜索「2 / 第2章」时用 */
+  chapterNumber?: number;
   /** 本章有未采用、未审阅的 AI 建议（会话内） */
   review?: boolean;
 }
@@ -68,6 +71,7 @@ export function WorkbenchShell({
   onOpenAi,
   children,
 }: WorkbenchShellProps) {
+  const appearance = useAppearanceSettings();
   const [railOpen, setRailOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [railView, setRailView] = useState(railTabs?.[0]?.key ?? 'chapters');
@@ -87,11 +91,20 @@ export function WorkbenchShell({
     .map((group) => ({
       ...group,
       chapters: group.chapters.filter((chapter) =>
-        `${chapter.title} ${chapter.meta}`.toLowerCase().includes(normalizedQuery),
+        `${chapter.title} ${chapter.meta} ${chapter.chapterNumber ?? ''} 第${chapter.chapterNumber ?? ''}章`
+          .toLowerCase()
+          .includes(normalizedQuery),
       ),
     }))
     .filter((group) => group.chapters.length > 0);
   const firstVisibleChapter = visibleGroups[0]?.chapters[0];
+  const appearanceStyle = {
+    '--wb-prose-family':
+      appearance.font === 'serif' ? 'var(--wb-font-serif)' : 'var(--wb-font-sans)',
+    '--wb-prose-size': `${appearance.size}px`,
+    '--wb-prose-line': String(lineHeightFor(appearance.font)),
+    '--wb-prose-max': `calc(40 * ${appearance.size}px)`,
+  } as CSSProperties;
   const flatChapters = groups.flatMap((group) => group.chapters);
   const currentIndex = flatChapters.findIndex((chapter) => chapter.current);
   const previousChapter = currentIndex > 0 ? flatChapters[currentIndex - 1] : undefined;
@@ -166,6 +179,8 @@ export function WorkbenchShell({
     <div
       ref={shellRef}
       className="wb-shell wb-scope"
+      data-font={appearance.font}
+      style={appearanceStyle}
       data-testid="workbench-root"
       data-rail-open={String(railOpen)}
       data-panel-open={String(panelOpen)}

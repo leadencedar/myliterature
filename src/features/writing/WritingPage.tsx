@@ -514,6 +514,7 @@ function WritingContent({ novel }: { novel: Novel }) {
       title: chapter.title || `第 ${chapter.index} 章`,
       meta: `${chapter.status === 'done' ? '已完成' : '草稿'} · ${formatWordCount(chapter.wordCount)}`,
       current: chapter.id === editingChapter.id,
+      chapterNumber: chapter.index,
       review: Boolean(unreviewedSuggestions[chapter.id]),
     });
     const inlineOutlineNode = editingChapter.outlineNodeId

@@ -6,6 +6,7 @@ import { useLlmSettings } from '@/llm/settingsStore';
 import { jsonResponse, sseResponse, textDeltaEvents } from '@/test/llmFixtures';
 import { createTestHarness, type TestHarness } from '@/test/renderWithProviders';
 import { ARCHIVE_SETTINGS_STORAGE_KEY, useArchiveSettings } from '../writing/archiveSettings';
+import { APPEARANCE_STORAGE_KEY, useAppearanceSettings } from './appearanceSettings';
 import { SettingsPage } from './SettingsPage';
 
 let harness: TestHarness;
@@ -224,5 +225,27 @@ describe('设置页 · 写作辅助', () => {
     const stored = localStorage.getItem(ARCHIVE_SETTINGS_STORAGE_KEY) ?? '';
     expect(stored).toContain('"autoArchive":false');
     expect(stored).toContain('"extractEntries":false');
+  });
+});
+
+describe('设置页 · 外观与阅读', () => {
+  it('默认黑体 17；切宋体后 18/2.05，正文宽度按 40×字号重算并持久化', async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    expect(screen.getByRole('button', { name: /黑体/u })).toHaveAttribute('aria-pressed', 'true');
+    const preview = screen.getByRole('group', { name: '正文预览' });
+    expect(preview).toHaveStyle({ fontSize: '17px', maxWidth: '680px' });
+
+    await user.click(screen.getByRole('button', { name: /宋体/u }));
+
+    expect(useAppearanceSettings.getState()).toMatchObject({ font: 'serif', size: 18 });
+    expect(preview).toHaveStyle({ fontSize: '18px', lineHeight: '2.05', maxWidth: '720px' });
+    const stored = JSON.parse(localStorage.getItem(APPEARANCE_STORAGE_KEY) ?? '{}');
+    expect(stored.state).toMatchObject({ font: 'serif', size: 18 });
+
+    await user.click(screen.getByRole('button', { name: '增大字号' }));
+    expect(useAppearanceSettings.getState().size).toBe(19);
+    expect(preview).toHaveStyle({ fontSize: '19px', maxWidth: '760px' });
   });
 });
