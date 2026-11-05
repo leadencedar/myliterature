@@ -121,11 +121,27 @@ describe('从大纲进入写作', () => {
 });
 
 describe('编辑与自动保存', () => {
-  it('输入后自动落盘，状态从「有改动」变「已保存」', async () => {
+  it('保存成功显示落库时间；空章的「加工这一段」禁用并说明原因', async () => {
+    const user = await enterEditor();
+
+    // 空章：加工不可用，但生成本章仍可用（两者语义不同）
+    expect(screen.getByRole('button', { name: '加工这一段' })).toBeDisabled();
+    expect(screen.getByText(/正文还是空的/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '生成本章' })).toBeEnabled();
+
+    await user.type(screen.getByLabelText('章节正文'), '雪落了整夜。');
+    await waitFor(() => expect(screen.getByText('已保存')).toBeInTheDocument(), {
+      timeout: 3000,
+    });
+    // 时间来自实际落库的 updatedAt，不是 UI 自己猜的
+    expect(screen.getByText(/\d{2}:\d{2}/u)).toBeInTheDocument();
+  });
+
+  it('输入后自动落盘，状态从「有未保存更改」变「已保存」', async () => {
     const user = await enterEditor();
 
     await user.type(screen.getByLabelText('章节正文'), '雪落了整夜。');
-    expect(screen.getByText('有改动')).toBeInTheDocument();
+    expect(screen.getByText('有未保存更改')).toBeInTheDocument();
 
     await waitFor(() => expect(screen.getByText('已保存')).toBeInTheDocument(), {
       timeout: 3000,
@@ -1820,6 +1836,8 @@ describe('保存失败恢复与串行保存（审计 §3.1）', () => {
     await user.type(screen.getByLabelText('章节正文'), '雪落了整夜。');
     pressSave();
     expect(await screen.findByText('保存失败')).toBeInTheDocument();
+    expect(screen.getByText(/保存失败，草稿仍保留/u)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '导出草稿' })).toBeInTheDocument();
 
     // 第二次 Ctrl+S：没有新输入也必须把失败的那次重新写一遍
     pressSave();

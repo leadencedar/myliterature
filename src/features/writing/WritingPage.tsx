@@ -23,6 +23,7 @@ import { ScenarioEntryCard } from '../scenario/ScenarioEntryCard';
 import { ChapterEditorScreen, type ChapterEditorHandle } from './ChapterEditorScreen';
 import { ChapterListItem } from './ChapterListItem';
 import { SideStorySheet } from './SideStorySheet';
+import { useUnreviewedSuggestions } from './unreviewedSuggestions';
 
 /**
  * 写作工作台按需加载：只有打开章节时才需要章节栏 / 右栏 / 内联编辑器代码，
@@ -133,6 +134,7 @@ function WritingContent({ novel }: { novel: Novel }) {
   const [proposalOpen, setProposalOpen] = useState(false);
   /** 内联编辑器的命令面：新建章节前先 flush */
   const [workbenchEditor, setWorkbenchEditor] = useState<ChapterEditorHandle | null>(null);
+  const unreviewedSuggestions = useUnreviewedSuggestions((state) => state.items);
   const modalOpen = useAnyModalOpen();
 
   /**
@@ -286,11 +288,17 @@ function WritingContent({ novel }: { novel: Novel }) {
       }
     : null;
 
+  const unreviewedCount = Object.keys(unreviewedSuggestions).length;
   const workbenchHeaderActions = (
     <>
       <button type="button" className="wb-shell-action" onClick={() => setScenarioOpen(true)}>
         推演
       </button>
+      {unreviewedCount > 0 ? (
+        <span className="wb-shell-review-count" aria-label={`待审阅建议 ${unreviewedCount} 条`}>
+          待审阅 {unreviewedCount}
+        </span>
+      ) : null}
       {data && data.pending.length > 0 ? (
         <button type="button" className="wb-shell-action" onClick={() => setProposalOpen(true)}>
           待确认 {data.pending.length}
@@ -506,6 +514,7 @@ function WritingContent({ novel }: { novel: Novel }) {
       title: chapter.title || `第 ${chapter.index} 章`,
       meta: `${chapter.status === 'done' ? '已完成' : '草稿'} · ${formatWordCount(chapter.wordCount)}`,
       current: chapter.id === editingChapter.id,
+      review: Boolean(unreviewedSuggestions[chapter.id]),
     });
     const inlineOutlineNode = editingChapter.outlineNodeId
       ? outline.find((node) => node.id === editingChapter.outlineNodeId)

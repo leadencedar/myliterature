@@ -6,6 +6,8 @@ export interface WorkbenchChapter {
   title: string;
   meta: string;
   current?: boolean;
+  /** 本章有未采用、未审阅的 AI 建议（会话内） */
+  review?: boolean;
 }
 
 export interface WorkbenchChapterGroup {
@@ -260,6 +262,14 @@ export function WorkbenchShell({
                             <span className="wb-shell-chapter-copy">
                               <strong>{chapter.title}</strong>
                               <small>{chapter.meta}</small>
+                              {chapter.review ? (
+                                <em
+                                  className="wb-shell-chapter-review"
+                                  title="本章有未审阅的 AI 建议"
+                                >
+                                  待审
+                                </em>
+                              ) : null}
                             </span>
                           </button>
                         </li>

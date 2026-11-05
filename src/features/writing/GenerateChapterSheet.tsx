@@ -11,6 +11,7 @@ import { normsInScope } from '@/domain/writingNorm';
 import { LlmError } from '@/llm/errors';
 import type { ChatResult } from '@/llm/types';
 import { useLlm } from '@/llm/useLlm';
+import { useUnreviewedSuggestion, useUnreviewedSuggestions } from './unreviewedSuggestions';
 import { Button } from '@/ui/Button';
 import { SegmentedControl, Toggle } from '@/ui/Controls';
 import { TextAreaField } from '@/ui/Field';
@@ -114,10 +115,16 @@ export function GenerateChapterSheet({
   onAccept,
 }: GenerateChapterSheetProps) {
   const llm = useLlm();
+  const chapterId = context.targetChapterId ?? '';
+  const storedSuggestion = useUnreviewedSuggestion(chapterId);
+  const markUnreviewed = useUnreviewedSuggestions((state) => state.mark);
+  const clearUnreviewed = useUnreviewedSuggestions((state) => state.clear);
 
   const [summaryCount, setSummaryCount] = useState(String(DEFAULT_RECENT_SUMMARY_COUNT));
   const [instruction, setInstruction] = useState('');
-  const [phase, setPhase] = useState<Phase>({ kind: 'form' });
+  const [phase, setPhase] = useState<Phase>(() =>
+    storedSuggestion ? { kind: 'done', text: storedSuggestion.text } : { kind: 'form' },
+  );
   const [selectedIds, setSelectedIds] = useState<string[] | null>(null);
   /** 外传章节是否附带主线进展；和摘要章数一样是面板的本地状态 */
   const [includeMainProgress, setIncludeMainProgress] = useState(false);
@@ -131,6 +138,12 @@ export function GenerateChapterSheet({
    * 模型才知道这一章原本要写什么；只存 ref，不需要触发重渲染。
    */
   const lastRunRef = useRef<{ system: string; user: string } | null>(null);
+
+  // 生成结果一出现就按章留痕；采用成功后由编辑器清除
+  useEffect(() => {
+    if (phase.kind !== 'done' || !phase.text.trim()) return;
+    markUnreviewed(chapterId, 'generate', phase.text, { content: existingContent });
+  }, [chapterId, markUnreviewed, phase]);
 
   /** 继续补写时的基准正文：流式回调要按「已有正文 + 新片段」拼出完整预览 */
   const continueBaseRef = useRef('');
@@ -704,7 +717,15 @@ export function GenerateChapterSheet({
                     追加到正文末尾
                   </Button>
                 ) : null}
-                <Button variant="ghost" size="md" block onClick={() => setPhase({ kind: 'form' })}>
+                <Button
+                  variant="ghost"
+                  size="md"
+                  block
+                  onClick={() => {
+                    clearUnreviewed(chapterId);
+                    setPhase({ kind: 'form' });
+                  }}
+                >
                   放弃，重新设置
                 </Button>
               </div>
