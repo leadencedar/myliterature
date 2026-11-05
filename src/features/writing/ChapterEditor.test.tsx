@@ -2077,6 +2077,29 @@ describe('内联编辑器（默认工作台）', () => {
     });
   });
 
+  it('章节搜索支持序号过滤，Enter 打开首个结果', async () => {
+    await harness.repository.createChapter(novel.id, {
+      title: '第1章 雪夜',
+      outlineNodeId: chapterNode.id,
+    });
+    await harness.repository.createChapter(novel.id, { title: '第2章 霜降' });
+
+    const user = userEvent.setup();
+    harness.renderUI(<WritingPage />);
+    await waitForLoaded();
+    await user.click(await screen.findByRole('button', { name: '继续写第 1 章' }));
+    await screen.findByLabelText('章节正文');
+
+    const search = screen.getByRole('searchbox', { name: '搜索章节' });
+    await user.type(search, '2');
+
+    expect(screen.queryByRole('button', { name: /第1章 雪夜/u })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /第2章 霜降/u })).toBeInTheDocument();
+
+    await user.type(search, '{enter}');
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toHaveValue('第2章 霜降'));
+  });
+
   it('移动端操作栏提供目录、切章、本章与 AI 入口', async () => {
     await harness.repository.createChapter(novel.id, {
       title: '第1章 雪夜',

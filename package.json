@@ -15,7 +15,8 @@
     "ui:width": "node scripts/ui-width-check.mjs",
     "ui:width:preview": "node scripts/ui-width-check.mjs --url http://127.0.0.1:5173/__workbench",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "ui:appearance": "node scripts/appearance-check.mjs"
   },
   "engines": {
     "node": ">=22.22.2"

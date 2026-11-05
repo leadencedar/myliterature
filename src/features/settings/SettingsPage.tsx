@@ -9,6 +9,14 @@ import { Toggle } from '@/ui/Controls';
 import { SelectField, TextField } from '@/ui/Field';
 import { Page, Section, SectionGrid } from '@/ui/Page';
 import { useArchiveSettings } from '../writing/archiveSettings';
+import {
+  DEFAULT_APPEARANCE_SETTINGS,
+  MAX_PROSE_SIZE,
+  MIN_PROSE_SIZE,
+  PROSE_FONT_STACKS,
+  lineHeightFor,
+  useAppearanceSettings,
+} from './appearanceSettings';
 import { BackupSection } from '../export/BackupSection';
 
 type TestState =
@@ -35,6 +43,7 @@ export function SettingsPage() {
   const llm = useLlm();
   const [showKey, setShowKey] = useState(false);
   const archive = useArchiveSettings();
+  const appearance = useAppearanceSettings();
   const [test, setTest] = useState<TestState>({ phase: 'idle' });
   const abortRef = useRef<AbortController | null>(null);
 
@@ -86,7 +95,7 @@ export function SettingsPage() {
   }
 
   return (
-    <Page title="设置" subtitle="模型 · 数据 · 备份" width="wide">
+    <Page title="设置" subtitle="模型 · 外观 · 数据 · 备份" width="wide">
       <Section
         title="模型服务"
         description="本应用不代理任何请求，你的 API Key 只保存在这台设备上，直接与服务商通信。"
@@ -190,6 +199,109 @@ export function SettingsPage() {
           成本：每章归档 1 次结构化调用（输入本章正文，输出摘要、进展与条目）。
           摘要与进展是摘要链的来源，必须生成；条目提取可以关闭。
         </p>
+      </Section>
+
+      <Section
+        title="外观与阅读"
+        description="正文默认黑体 17px / 1.85；宋体推荐 18px / 2.05。正文宽度按 40 × 字号自动重算，只影响正文，不影响按钮与导航。"
+      >
+        <div className="flex flex-col gap-1.5">
+          <span className="text-sm font-medium text-ink-900">正文字体</span>
+          <div className="flex gap-2" role="group" aria-label="正文字体">
+            {(
+              [
+                { key: 'sans', label: '黑体', note: '默认 · 17/1.85' },
+                { key: 'serif', label: '宋体', note: '推荐 18/2.05' },
+              ] as const
+            ).map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                aria-pressed={appearance.font === option.key}
+                onClick={() => appearance.setFont(option.key)}
+                className={[
+                  'flex flex-1 flex-col items-start rounded-xl border px-3 py-2 text-left transition-colors',
+                  appearance.font === option.key
+                    ? 'border-ink-900 bg-paper-sunken'
+                    : 'border-ink-100 bg-paper-raised hover:bg-paper-sunken',
+                ].join(' ')}
+              >
+                <span className="text-sm font-medium text-ink-900">{option.label}</span>
+                <span className="mt-0.5 text-[0.6875rem] text-ink-500">{option.note}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-baseline justify-between gap-3">
+            <label htmlFor="prose-size" className="text-sm font-medium text-ink-900">
+              正文字号
+            </label>
+            <output htmlFor="prose-size" className="text-sm tabular-nums text-ink-700">
+              {appearance.size}px
+            </output>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label="减小字号"
+              disabled={appearance.size <= MIN_PROSE_SIZE}
+              onClick={() => appearance.setSize(appearance.size - 1)}
+              className="tap-target flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-ink-100 bg-paper-raised text-lg text-ink-700 disabled:opacity-40"
+            >
+              −
+            </button>
+            <input
+              id="prose-size"
+              type="range"
+              min={MIN_PROSE_SIZE}
+              max={MAX_PROSE_SIZE}
+              step={1}
+              value={appearance.size}
+              onChange={(event) => appearance.setSize(Number(event.target.value))}
+              className="min-w-0 flex-1 accent-ink-900"
+            />
+            <button
+              type="button"
+              aria-label="增大字号"
+              disabled={appearance.size >= MAX_PROSE_SIZE}
+              onClick={() => appearance.setSize(appearance.size + 1)}
+              className="tap-target flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-ink-100 bg-paper-raised text-lg text-ink-700 disabled:opacity-40"
+            >
+              ＋
+            </button>
+          </div>
+          <p className="text-xs leading-relaxed text-ink-500">
+            正文宽约 {appearance.size * 40}px（40 × 字号）；行高{' '}
+            {lineHeightFor(appearance.font).toFixed(2)}。
+          </p>
+        </div>
+
+        <div
+          role="group"
+          aria-label="正文预览"
+          style={{
+            fontFamily: PROSE_FONT_STACKS[appearance.font],
+            fontSize: `${appearance.size}px`,
+            lineHeight: lineHeightFor(appearance.font),
+            maxWidth: `${appearance.size * 40}px`,
+          }}
+          className="rounded-xl border border-ink-100 bg-paper px-4 py-3 text-ink-900"
+        >
+          旧城的雨，总比别处下得慢。林照沿着石阶往上走，鞋底带起细碎的水声。
+        </div>
+
+        <Button
+          size="sm"
+          onClick={() => appearance.reset()}
+          disabled={
+            appearance.font === DEFAULT_APPEARANCE_SETTINGS.font &&
+            appearance.size === DEFAULT_APPEARANCE_SETTINGS.size
+          }
+        >
+          恢复默认
+        </Button>
       </Section>
 
       <Section title="连通性测试" description="发一条极短的请求验证配置，费用可忽略。">

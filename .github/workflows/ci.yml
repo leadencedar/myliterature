@@ -97,3 +97,4 @@ jobs:
           fi
 
           npm run ui:width:preview
+          npm run ui:appearance
